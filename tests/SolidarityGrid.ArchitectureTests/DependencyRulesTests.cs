@@ -291,7 +291,7 @@ public sealed class DependencyRulesTests
     }
 
     [Fact]
-    public void MeshProtoDefinesOnlyProbeRpc()
+    public void MeshProtoDefinesOnlyProbeAndReplicatePaymentRpcs()
     {
         var protoPath = Path.Combine(
             FindRepositoryRoot(),
@@ -305,8 +305,11 @@ public sealed class DependencyRulesTests
             .Where(line => line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal))
             .ToArray();
 
-        Assert.Single(rpcLines);
-        Assert.Contains("rpc Probe(", rpcLines[0], StringComparison.Ordinal);
+        Assert.Equal(2, rpcLines.Length);
+        Assert.Contains(rpcLines, line =>
+            line.Contains("rpc Probe(", StringComparison.Ordinal));
+        Assert.Contains(rpcLines, line =>
+            line.Contains("rpc ReplicatePayment(", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -381,11 +384,14 @@ public sealed class DependencyRulesTests
         Assert.DoesNotContain("MeshControlClient", nodeSource, StringComparison.Ordinal);
         Assert.DoesNotContain("PaymentRepository", serviceSource, StringComparison.Ordinal);
         Assert.DoesNotContain("SubmitPayment", serviceSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReplicatePayment", serviceSource, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PaymentReplicationCoordinator",
+            serviceSource,
+            StringComparison.Ordinal);
     }
 
     [Fact]
-    public void MeshClientHasNoRetryOrReplicationImplementation()
+    public void MeshClientHasReplicationWithoutRetries()
     {
         var meshPath = Path.Combine(
             FindRepositoryRoot(),
@@ -396,7 +402,7 @@ public sealed class DependencyRulesTests
 
         Assert.DoesNotContain("Polly", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Retry", source, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("ReplicatePayment", source, StringComparison.Ordinal);
+        Assert.Contains("GrpcPaymentReplicaTransport", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -476,7 +482,7 @@ public sealed class DependencyRulesTests
     }
 
     [Fact]
-    public void FailureDetectorAddsNoRpcOrPaymentCoordination()
+    public void MeshContractContainsNoUnapprovedRpcOrTakeover()
     {
         var root = FindRepositoryRoot();
         var proto = File.ReadAllText(Path.Combine(
@@ -492,12 +498,39 @@ public sealed class DependencyRulesTests
             ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Node")));
 
         Assert.DoesNotContain("rpc Heartbeat", proto, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReplicatePayment", proto, StringComparison.Ordinal);
-        Assert.Single(
-            proto.Split('\n'),
-            line => line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal));
-        Assert.DoesNotContain("MarkReplicated(", nonDomainSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("rpc Gossip", proto, StringComparison.Ordinal);
+        Assert.DoesNotContain("rpc Vote", proto, StringComparison.Ordinal);
+        Assert.Equal(
+            2,
+            proto.Split('\n').Count(
+                line => line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal)));
         Assert.DoesNotContain("Takeover", nonDomainSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PaymentReplicationAddsNoSchemaOrWorker()
+    {
+        var root = FindRepositoryRoot();
+        var migrations = Directory.GetFiles(
+            Path.Combine(
+                root,
+                "src",
+                "SolidarityGrid.Infrastructure",
+                "Persistence",
+                "Migrations"),
+            "*.cs",
+            SearchOption.TopDirectoryOnly);
+        var nonDomainSource = string.Join(
+            Environment.NewLine,
+            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Application")),
+            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Infrastructure")),
+            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Node")));
+
+        Assert.Equal(3, migrations.Length);
+        Assert.DoesNotContain("ConsensusEngine", nonDomainSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("ProcessingWorker", nonDomainSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("TakeoverWorker", nonDomainSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("BuildServiceProvider", nonDomainSource, StringComparison.Ordinal);
     }
 
     [Fact]

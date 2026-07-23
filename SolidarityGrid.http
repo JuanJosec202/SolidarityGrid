@@ -7,7 +7,7 @@
 ### Identidad de node-a
 GET {{nodeA}}/node
 
-### Crear un pago local en node-a
+### Crear y replicar un pago desde node-a (202 solo con quorum)
 POST {{nodeA}}/pay
 Content-Type: application/json
 Idempotency-Key: {{idempotencyKey}}
@@ -40,8 +40,14 @@ Idempotency-Key: {{idempotencyKey}}
 ### Consultar el pago; copie manualmente paymentId de la creación
 GET {{nodeA}}/payments/{{paymentId}}
 
-### node-b tiene almacenamiento independiente y responderá 404 para el ID de node-a
+### La misma identidad debe existir durablemente en node-b
 GET {{nodeB}}/payments/{{paymentId}}
+
+### La misma identidad debe existir durablemente en node-c
+GET {{nodeC}}/payments/{{paymentId}}
+
+### Sin quorum: detenga node-b y node-c; POST retorna 503 y Location permite
+### consultar la copia local Received. Inicie un peer y repita la misma clave.
 
 ### Identidad de node-b
 GET {{nodeB}}/node

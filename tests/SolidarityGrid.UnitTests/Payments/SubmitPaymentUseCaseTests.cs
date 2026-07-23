@@ -1,6 +1,7 @@
 using SolidarityGrid.Application.Abstractions;
 using SolidarityGrid.Application.Abstractions.Persistence;
 using SolidarityGrid.Application.Payments;
+using SolidarityGrid.Application.Payments.Replication;
 using SolidarityGrid.Domain.Payments;
 using Xunit;
 
@@ -20,22 +21,24 @@ public sealed class SubmitPaymentUseCaseTests
 
         var result = await fixture.UseCase.ExecuteAsync(
             Command(),
+            "test-correlation",
             CancellationToken.None);
 
         Assert.Equal(SubmitPaymentOutcome.Created, result.Outcome);
         Assert.Equal(GeneratedId, result.Payment?.Id);
         Assert.Equal(UtcNow, result.Payment?.CreatedAtUtc);
-        Assert.Equal("Received", result.Payment?.Status);
+        Assert.Equal("Replicated", result.Payment?.Status);
+        Assert.Equal(2, result.Payment?.Version);
         Assert.Equal("COP", result.Payment?.Currency);
         Assert.Equal(1, fixture.Repository.AddCalls);
-        Assert.Equal(1, fixture.UnitOfWork.SaveCalls);
+        Assert.Equal(2, fixture.UnitOfWork.SaveCalls);
         Assert.Equal(1, fixture.IdGenerator.Calls);
     }
 
     [Fact]
     public async Task ReplayReturnsExistingPaymentWithoutMutationOrSave()
     {
-        var existing = ExistingPayment();
+        var existing = ExistingPayment(replicated: true);
         existing.DequeueDomainEvents();
         var version = existing.Version;
         var updatedAt = existing.UpdatedAtUtc;
@@ -43,6 +46,7 @@ public sealed class SubmitPaymentUseCaseTests
 
         var result = await fixture.UseCase.ExecuteAsync(
             Command(),
+            "test-correlation",
             CancellationToken.None);
 
         Assert.Equal(SubmitPaymentOutcome.Replayed, result.Outcome);
@@ -66,6 +70,7 @@ public sealed class SubmitPaymentUseCaseTests
 
         var result = await fixture.UseCase.ExecuteAsync(
             Command(amount: amount, currency: currency),
+            "test-correlation",
             CancellationToken.None);
 
         Assert.Equal(SubmitPaymentOutcome.Conflict, result.Outcome);
@@ -82,6 +87,7 @@ public sealed class SubmitPaymentUseCaseTests
 
         var result = await fixture.UseCase.ExecuteAsync(
             Command(key: "pay-1"),
+            "test-correlation",
             CancellationToken.None);
 
         Assert.Equal(SubmitPaymentOutcome.Created, result.Outcome);
@@ -104,6 +110,7 @@ public sealed class SubmitPaymentUseCaseTests
 
         var result = await fixture.UseCase.ExecuteAsync(
             Command(key, amount, currency),
+            "test-correlation",
             CancellationToken.None);
 
         Assert.Equal(SubmitPaymentOutcome.Invalid, result.Outcome);
@@ -119,6 +126,7 @@ public sealed class SubmitPaymentUseCaseTests
 
         var result = await fixture.UseCase.ExecuteAsync(
             Command(currency: "cop"),
+            "test-correlation",
             CancellationToken.None);
 
         Assert.Equal("COP", result.Payment?.Currency);
@@ -128,7 +136,7 @@ public sealed class SubmitPaymentUseCaseTests
     [Fact]
     public async Task DuplicateInsertWithMatchingWinnerReturnsReplay()
     {
-        var winner = ExistingPayment();
+        var winner = ExistingPayment(replicated: true);
         var duplicate = new DuplicatePaymentIdempotencyKeyException(
             winner.IdempotencyKey,
             new InvalidOperationException("simulated unique conflict"));
@@ -138,6 +146,7 @@ public sealed class SubmitPaymentUseCaseTests
 
         var result = await fixture.UseCase.ExecuteAsync(
             Command(),
+            "test-correlation",
             CancellationToken.None);
 
         Assert.Equal(SubmitPaymentOutcome.Replayed, result.Outcome);
@@ -149,7 +158,7 @@ public sealed class SubmitPaymentUseCaseTests
     [Fact]
     public async Task DuplicateInsertWithDifferentWinnerReturnsConflict()
     {
-        var winner = ExistingPayment(amount: 999m);
+        var winner = ExistingPayment(amount: 999m, replicated: true);
         var duplicate = new DuplicatePaymentIdempotencyKeyException(
             winner.IdempotencyKey,
             new InvalidOperationException("simulated unique conflict"));
@@ -159,6 +168,7 @@ public sealed class SubmitPaymentUseCaseTests
 
         var result = await fixture.UseCase.ExecuteAsync(
             Command(),
+            "test-correlation",
             CancellationToken.None);
 
         Assert.Equal(SubmitPaymentOutcome.Conflict, result.Outcome);
@@ -179,7 +189,10 @@ public sealed class SubmitPaymentUseCaseTests
             saveException: duplicate);
 
         var exception = await Assert.ThrowsAsync<PaymentIdempotencyRaceException>(
-            () => fixture.UseCase.ExecuteAsync(Command(), CancellationToken.None));
+            () => fixture.UseCase.ExecuteAsync(
+                Command(),
+                "test-correlation",
+                CancellationToken.None));
 
         Assert.Equal(key, exception.IdempotencyKey);
     }
@@ -192,26 +205,75 @@ public sealed class SubmitPaymentUseCaseTests
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => fixture.UseCase.ExecuteAsync(Command(), cancellation.Token));
+            () => fixture.UseCase.ExecuteAsync(
+                Command(),
+                "test-correlation",
+                cancellation.Token));
 
         Assert.Equal(cancellation.Token, fixture.Repository.LastCancellationToken);
+    }
+
+    [Fact]
+    public async Task QuorumUnavailableLeavesNewPaymentReceived()
+    {
+        var fixture = CreateFixture(
+            replicaResults:
+            [
+                FailedReplica("peer-one"),
+                FailedReplica("peer-two"),
+            ]);
+
+        var result = await fixture.UseCase.ExecuteAsync(
+            Command(),
+            "no-quorum",
+            CancellationToken.None);
+
+        Assert.Equal(SubmitPaymentOutcome.ReplicationUnavailable, result.Outcome);
+        Assert.Equal("Received", result.Payment?.Status);
+        Assert.Equal(1, result.Payment?.Version);
+        Assert.Equal(1, fixture.UnitOfWork.SaveCalls);
+    }
+
+    [Fact]
+    public async Task ReceivedReplayRetriesAndBecomesReplicated()
+    {
+        var existing = ExistingPayment();
+        var fixture = CreateFixture(existing);
+
+        var result = await fixture.UseCase.ExecuteAsync(
+            Command(),
+            "retry-replication",
+            CancellationToken.None);
+
+        Assert.Equal(SubmitPaymentOutcome.Replayed, result.Outcome);
+        Assert.Equal(existing.Id, result.Payment?.Id);
+        Assert.Equal("Replicated", result.Payment?.Status);
+        Assert.Equal(2, result.Payment?.Version);
+        Assert.Equal(1, fixture.UnitOfWork.SaveCalls);
     }
 
     private static Fixture CreateFixture(
         Payment? existing = null,
         IEnumerable<Payment?>? responses = null,
-        Exception? saveException = null)
+        Exception? saveException = null,
+        IReadOnlyCollection<PaymentReplicaResult>? replicaResults = null)
     {
         var repository = new FakePaymentRepository(existing, responses);
         var unitOfWork = new FakeUnitOfWork(saveException);
         var idGenerator = new FixedIdGenerator(GeneratedId);
         var clock = new FixedTimeProvider(UtcNow);
+        var coordinator = new PaymentReplicationCoordinator(
+            new FakeReplicaTransport(replicaResults),
+            unitOfWork,
+            clock,
+            new NullReplicationObserver());
         return new Fixture(
             new SubmitPaymentUseCase(
                 repository,
                 unitOfWork,
                 idGenerator,
-                clock),
+                clock,
+                coordinator),
             repository,
             unitOfWork,
             idGenerator);
@@ -223,12 +285,30 @@ public sealed class SubmitPaymentUseCaseTests
         string currency = "COP") =>
         new(key, amount, currency);
 
-    private static Payment ExistingPayment(decimal amount = 150000m) =>
-        Payment.Create(
+    private static PaymentReplicaResult FailedReplica(string nodeId) =>
+        new(
+            new NodeId(nodeId),
+            false,
+            false,
+            PaymentReplicaErrorCodes.PeerUnavailable,
+            "Unavailable.");
+
+    private static Payment ExistingPayment(
+        decimal amount = 150000m,
+        bool replicated = false)
+    {
+        var payment = Payment.Create(
             Guid.Parse("11111111-2222-3333-4444-555555555555"),
             new IdempotencyKey("PAY-1"),
             new Money(amount, "COP"),
             UtcNow.AddMinutes(-1));
+        if (replicated)
+        {
+            payment.MarkReplicated(UtcNow.AddSeconds(-30));
+        }
+
+        return payment;
+    }
 
     private sealed record Fixture(
         SubmitPaymentUseCase UseCase,
@@ -319,6 +399,50 @@ public sealed class SubmitPaymentUseCaseTests
             return saveException is null
                 ? Task.FromResult(1)
                 : Task.FromException<int>(saveException);
+        }
+    }
+
+    private sealed class FakeReplicaTransport(
+        IReadOnlyCollection<PaymentReplicaResult>? results) : IPaymentReplicaTransport
+    {
+        public Task<IReadOnlyCollection<PaymentReplicaResult>> ReplicateAsync(
+            PaymentReplica replica,
+            string correlationId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IReadOnlyCollection<PaymentReplicaResult> actual = results ??
+            [
+                new(
+                    new NodeId("peer-one"),
+                    true,
+                    false,
+                    null,
+                    null),
+                new(
+                    new NodeId("peer-two"),
+                    false,
+                    false,
+                    PaymentReplicaErrorCodes.PeerUnavailable,
+                    "Unavailable."),
+            ];
+            return Task.FromResult(actual);
+        }
+    }
+
+    private sealed class NullReplicationObserver : IPaymentReplicationObserver
+    {
+        public void ReplicationStarted(Guid paymentId, string correlationId)
+        {
+        }
+
+        public void ReplicationCompleted(
+            Guid paymentId,
+            string correlationId,
+            int successfulReplicas,
+            bool quorumReached,
+            TimeSpan duration)
+        {
         }
     }
 }

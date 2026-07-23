@@ -7,7 +7,8 @@ estableció su fundación técnica y el Slice 1 incorporó el dominio del pago, 
 máquina de estados y las reglas de idempotencia. El Slice 2 aporta persistencia
 SQLite durable e independiente por nodo. El Slice 3 expone una API pública
 idempotente para crear y consultar pagos locales. El Slice 4 agrega transporte
-mesh directo mediante gRPC, sin cambiar el carácter local de los pagos.
+mesh directo mediante gRPC. El Slice 5 incorpora el detector periódico de fallos
+y el Slice 6 replica cada pago de forma durable hasta alcanzar quorum 2 de 3.
 
 ## Slices completados
 
@@ -20,6 +21,8 @@ mesh directo mediante gRPC, sin cambiar el carácter local de los pagos.
   Details.
 - Slice 4: contrato protobuf versionado, `Probe` gRPC, identidad de proceso,
   canales HTTP/2 reutilizables y diagnóstico de conectividad.
+- Slice 5: heartbeats, estados de salud, recuperación y detección de reinicios.
+- Slice 6: replicación gRPC durable e idempotente con quorum 2 de 3.
 
 ## Requisitos
 
@@ -121,9 +124,32 @@ impedir la suplantación de NodeId.
 
 ## API pública
 
-`POST /pay` recibe un pago y lo guarda localmente en estado `Received`.
+`POST /pay` guarda primero el pago localmente y luego intenta replicarlo.
 `GET /payments/{paymentId}` consulta el recurso en el mismo nodo. Un identificador
 que no cumple la constraint `:guid` no coincide con la ruta y retorna 404.
+
+## Replicación
+
+Cada pago se envía directamente por gRPC a los dos peers en paralelo, sin broker
+y sin retries automáticos. El receptor responde solo después de guardar la misma
+identidad, clave, amount, currency y timestamps en su SQLite local. Las réplicas
+son idempotentes y quedan al menos en estado `Replicated`.
+
+## Quorum
+
+```text
+node local + un peer con confirmación durable = quorum 2 de 3
+```
+
+No es necesario que los tres nodos confirmen. El estado del failure detector es
+diagnóstico: siempre se intenta la llamada gRPC y el quorum utiliza el resultado
+real del transporte.
+
+`POST /pay` retorna `202 Accepted` para una creación solo cuando existe una
+segunda copia durable. Sin confirmación remota retorna `503 Service Unavailable`;
+el pago permanece localmente en `Received` y puede reintentarse con la misma
+`Idempotency-Key`. Un replay que alcanza quorum retorna `200 OK`, conserva el
+PaymentId y muestra estado `Replicated`, versión 2.
 
 ## Idempotency-Key
 
@@ -161,6 +187,8 @@ También puede ejecutarse la colección [SolidarityGrid.http](SolidarityGrid.htt
 - `400 Bad Request`: header, payload o JSON inválido.
 - `404 Not Found`: pago ausente en el nodo consultado.
 - `409 Conflict`: clave reutilizada con otro payload.
+- `503 Service Unavailable`: no existe una segunda copia durable; puede
+  reintentarse con la misma clave.
 
 Todos los errores del endpoint incluyen Problem Details con `code` y
 `correlationId`.
@@ -196,6 +224,17 @@ Para demostrar la línea temporal `Alive → Suspected → Unreachable → Alive
 
 ```bash
 ./scripts/demo-heartbeats.sh
+```
+
+Para demostrar replicación normal, quorum con un peer caído, 503 sin quorum y
+recuperación mediante replay:
+
+```powershell
+.\scripts\demo-replication.ps1
+```
+
+```bash
+./scripts/demo-replication.sh
 ```
 
 ## Persistencia local por nodo
@@ -284,19 +323,20 @@ El transporte interno está documentado en
 [ADR 0005: Direct gRPC mesh transport](docs/adr/0005-direct-grpc-mesh-transport.md).
 El detector periódico está documentado en
 [ADR 0006: Heartbeat failure detector](docs/adr/0006-heartbeat-failure-detector.md).
+La replicación durable está documentada en
+[ADR 0007: Durable payment replication](docs/adr/0007-durable-payment-replication.md).
 
 ## Limitación actual
 
-La idempotencia sigue siendo local por nodo. El detector periódico produce una
-señal local; `Alive` y `Unreachable` no equivalen a consenso ni prueban que un
-proceso murió. Todavía no existen replicación, quorum, procesamiento ni failover.
-Enviar la misma clave a otro nodo puede crear una copia independiente; la
-convergencia se resolverá en un slice posterior.
+No existe reconciliación histórica para un nodo que estuvo caído, procesamiento,
+owner coordinado ni takeover. Solicitudes simultáneas con la misma clave en nodos
+distintos antes de replicarse quedan fuera del escenario principal. El quorum de
+replicación confirma durabilidad, pero todavía no es quorum de ownership.
 
 ## Roadmap
 
-- Replicación y coordinación con quorum.
-- Replicación, recuperación y observabilidad distribuida.
+- Ownership, leases coordinadas y procesamiento idempotente.
+- Recuperación, reconciliación y observabilidad distribuida.
 - Pipeline de demostración y pruebas de caos.
 
 No se asocian fechas a estos slices; cada uno deberá conservar los límites de

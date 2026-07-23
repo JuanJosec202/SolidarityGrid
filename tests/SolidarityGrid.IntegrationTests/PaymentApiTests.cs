@@ -37,8 +37,8 @@ public sealed class PaymentApiTests : IClassFixture<ValidNodeFactory>
         Assert.Equal(key, body.GetProperty("idempotencyKey").GetString());
         Assert.Equal(150000m, body.GetProperty("amount").GetDecimal());
         Assert.Equal("COP", body.GetProperty("currency").GetString());
-        Assert.Equal("Received", body.GetProperty("status").GetString());
-        Assert.Equal(1, body.GetProperty("version").GetInt64());
+        Assert.Equal("Replicated", body.GetProperty("status").GetString());
+        Assert.Equal(2, body.GetProperty("version").GetInt64());
         Assert.Equal("test-node", body.GetProperty("acceptedByNodeId").GetString());
         Assert.False(body.GetProperty("isReplay").GetBoolean());
         Assert.Equal(JsonValueKind.Null, body.GetProperty("ownerNodeId").ValueKind);
@@ -333,7 +333,7 @@ public sealed class PaymentApiTests : IClassFixture<ValidNodeFactory>
     }
 
     [Fact]
-    public async Task PaymentCreatedOnOneNodeIsAbsentFromAnotherNode()
+    public async Task IndependentNodeDoesNotShareCentralDatabase()
     {
         using var nodeAFactory = new ValidNodeFactory(
             ValidNodeFactory.CreateDatabaseDirectory(),

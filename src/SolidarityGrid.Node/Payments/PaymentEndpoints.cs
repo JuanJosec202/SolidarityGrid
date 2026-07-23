@@ -41,6 +41,7 @@ public static class PaymentEndpoints
                 idempotencyKey,
                 request.Amount,
                 request.Currency ?? string.Empty),
+            GetCorrelationId(context),
             cancellationToken);
 
         return result.Outcome switch
@@ -55,6 +56,8 @@ public static class PaymentEndpoints
                 result.Payment!,
                 nodeOptions.Value.NodeId,
                 isReplay: true),
+            SubmitPaymentOutcome.ReplicationUnavailable =>
+                CreateReplicationUnavailable(context, result),
             SubmitPaymentOutcome.Conflict => PaymentProblemDetails.Create(
                 context,
                 StatusCodes.Status409Conflict,
@@ -69,6 +72,21 @@ public static class PaymentEndpoints
                 result.ErrorCode!),
             _ => throw new InvalidOperationException("Unknown submit payment outcome."),
         };
+    }
+
+    private static IResult CreateReplicationUnavailable(
+        HttpContext context,
+        SubmitPaymentResult result)
+    {
+        context.Response.Headers.RetryAfter = "1";
+        context.Response.Headers.Location =
+            $"/payments/{result.Payment!.Id:D}";
+        return PaymentProblemDetails.Create(
+            context,
+            StatusCodes.Status503ServiceUnavailable,
+            "Payment replication unavailable",
+            "A durable payment quorum is not currently available. Retry the same request.",
+            result.ErrorCode!);
     }
 
     private static async Task<IResult> GetByIdAsync(
@@ -125,4 +143,8 @@ public static class PaymentEndpoints
         idempotencyKey = values[0]!;
         return true;
     }
+
+    private static string GetCorrelationId(HttpContext context) =>
+        context.Items[Diagnostics.CorrelationIdMiddleware.ItemName]?.ToString() ??
+        context.TraceIdentifier;
 }

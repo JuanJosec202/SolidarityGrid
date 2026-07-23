@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using SolidarityGrid.Application.Payments;
+using SolidarityGrid.Application.Payments.Replication;
 
 namespace SolidarityGrid.Application;
 
@@ -13,6 +14,8 @@ public static class DependencyInjection
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<SubmitPaymentUseCase>();
         services.AddScoped<GetPaymentByIdUseCase>();
+        services.AddScoped<ReceivePaymentReplicaUseCase>();
+        services.AddScoped<PaymentReplicationCoordinator>();
         return services;
     }
 }

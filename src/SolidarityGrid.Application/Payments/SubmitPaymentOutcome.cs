@@ -4,6 +4,7 @@ public enum SubmitPaymentOutcome
 {
     Created,
     Replayed,
+    ReplicationUnavailable,
     Conflict,
     Invalid,
 }

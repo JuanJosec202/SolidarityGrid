@@ -132,6 +132,106 @@ public sealed class MeshControlGrpcServiceTests
         Assert.Equal(0, count);
     }
 
+    [Fact]
+    public async Task ValidReplicaIsDurablyStoredAndReplayIsIdempotent()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var client = CreateClient(channel);
+        var request = ValidReplicaRequest();
+
+        var first = await client.ReplicatePaymentAsync(
+            request,
+            new Metadata { { "x-correlation-id", "replica-correlation" } });
+        var replay = await client.ReplicatePaymentAsync(request);
+
+        Assert.True(first.Stored);
+        Assert.False(first.AlreadyExisted);
+        Assert.Equal("Replicated", first.Status);
+        Assert.Equal(2, first.Version);
+        Assert.True(replay.Stored);
+        Assert.True(replay.AlreadyExisted);
+        Assert.Equal(first.PaymentId, replay.PaymentId);
+        Assert.Equal(first.Version, replay.Version);
+        Assert.Equal(1, await CountPaymentAsync(factory.DatabasePath, first.PaymentId));
+        Assert.True(factory.Logs.ContainsScope(
+            "CorrelationId",
+            "replica-correlation"));
+    }
+
+    [Fact]
+    public async Task ReplicaFromUnknownCallerIsPermissionDenied()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var request = ValidReplicaRequest();
+        request.CallerNodeId = "unknown-node";
+
+        var exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await CreateClient(channel).ReplicatePaymentAsync(request));
+
+        Assert.Equal(StatusCode.PermissionDenied, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task ReplicaWithProtocolMismatchIsFailedPrecondition()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var request = ValidReplicaRequest();
+        request.ProtocolVersion++;
+
+        var exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await CreateClient(channel).ReplicatePaymentAsync(request));
+
+        Assert.Equal(StatusCode.FailedPrecondition, exception.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("paymentId")]
+    [InlineData("amount")]
+    [InlineData("timestamp")]
+    public async Task InvalidReplicaPayloadIsInvalidArgument(string invalidField)
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var request = ValidReplicaRequest();
+        if (invalidField == "paymentId")
+        {
+            request.PaymentId = "invalid";
+        }
+        else if (invalidField == "amount")
+        {
+            request.Amount = "not-decimal";
+        }
+        else
+        {
+            request.ReplicatedAtUtcTicks = request.CreatedAtUtcTicks - 1;
+        }
+
+        var exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await CreateClient(channel).ReplicatePaymentAsync(request));
+
+        Assert.Equal(StatusCode.InvalidArgument, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task ConflictingReplicaIsAlreadyExists()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var client = CreateClient(channel);
+        var request = ValidReplicaRequest();
+        await client.ReplicatePaymentAsync(request);
+        request.Amount = "999";
+
+        var exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.ReplicatePaymentAsync(request));
+
+        Assert.Equal(StatusCode.AlreadyExists, exception.StatusCode);
+        Assert.Equal(1, await CountPaymentAsync(factory.DatabasePath, request.PaymentId));
+    }
+
     private static GrpcChannel CreateChannel(ValidNodeFactory factory) =>
         GrpcChannel.ForAddress(
             "http://localhost",
@@ -151,6 +251,49 @@ public sealed class MeshControlGrpcServiceTests
             ProtocolVersion = MeshProtocol.CurrentVersion,
             SentAtUnixMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
+
+    private static ReplicatePaymentRequest ValidReplicaRequest()
+    {
+        var createdAt = new DateTimeOffset(
+            2026,
+            7,
+            25,
+            12,
+            0,
+            0,
+            TimeSpan.Zero);
+        return new ReplicatePaymentRequest
+        {
+            CallerNodeId = "peer-one",
+            CallerInstanceId = Guid.NewGuid().ToString("D"),
+            ProtocolVersion = MeshProtocol.CurrentVersion,
+            PaymentId = Guid.NewGuid().ToString("D"),
+            IdempotencyKey = $"GRPC-{Guid.NewGuid():N}",
+            Amount = "125.50",
+            Currency = "usd",
+            CreatedAtUtcTicks = createdAt.UtcTicks,
+            ReplicatedAtUtcTicks = createdAt.AddSeconds(1).UtcTicks,
+        };
+    }
+
+    private static async Task<long> CountPaymentAsync(
+        string databasePath,
+        string paymentId)
+    {
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString();
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM payments WHERE id = $id;";
+        command.Parameters.AddWithValue("$id", paymentId);
+        return Convert.ToInt64(
+            await command.ExecuteScalarAsync(),
+            System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     private sealed class MeshServerFactory : ValidNodeFactory
     {

@@ -38,4 +38,43 @@ internal static partial class MeshServerLog
         Guid localInstanceId,
         string peerNodeId,
         int protocolVersion);
+
+    [LoggerMessage(
+        EventId = 4203,
+        Level = LogLevel.Information,
+        EventName = "PaymentReplicaStored",
+        Message = "Payment {PaymentId} replica from {PeerNodeId} was durably stored by {LocalNodeId} as {Status} version {Version}.")]
+    public static partial void ReplicaStored(
+        ILogger logger,
+        Guid paymentId,
+        string peerNodeId,
+        string localNodeId,
+        string status,
+        long version);
+
+    [LoggerMessage(
+        EventId = 4204,
+        Level = LogLevel.Information,
+        EventName = "PaymentReplicaAlreadyExists",
+        Message = "Payment {PaymentId} replica from {PeerNodeId} already existed on {LocalNodeId} as {Status} version {Version}.")]
+    public static partial void ReplicaAlreadyExists(
+        ILogger logger,
+        Guid paymentId,
+        string peerNodeId,
+        string localNodeId,
+        string status,
+        long version);
+
+    [LoggerMessage(
+        EventId = 4205,
+        Level = LogLevel.Warning,
+        EventName = "PaymentReplicaRejected",
+        Message = "Payment {PaymentId} replica from {PeerNodeId} was rejected by {LocalNodeId} with {ErrorCode} ({GrpcStatus}).")]
+    public static partial void ReplicaRejected(
+        ILogger logger,
+        Guid paymentId,
+        string peerNodeId,
+        string localNodeId,
+        string errorCode,
+        string grpcStatus);
 }

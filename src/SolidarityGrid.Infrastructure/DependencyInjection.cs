@@ -7,6 +7,7 @@ using SolidarityGrid.Application.Abstractions.Persistence;
 using SolidarityGrid.Application.Abstractions;
 using SolidarityGrid.Application.Mesh;
 using SolidarityGrid.Application.Mesh.Health;
+using SolidarityGrid.Application.Payments.Replication;
 using SolidarityGrid.Infrastructure.Identifiers;
 using SolidarityGrid.Infrastructure.Mesh;
 using SolidarityGrid.Infrastructure.Mesh.Configuration;
@@ -62,6 +63,12 @@ public static class DependencyInjection
             MeshFailureDetectorOptionsValidator>();
         services.AddSingleton<GrpcMeshChannelPool>();
         services.AddSingleton<IMeshPeerProbe, GrpcMeshPeerProbe>();
+        services.AddSingleton<
+            IPaymentReplicaTransport,
+            GrpcPaymentReplicaTransport>();
+        services.AddSingleton<
+            IPaymentReplicationObserver,
+            PaymentReplicationObserver>();
         services.AddSingleton<IMeshPeerHealthRegistry>(serviceProvider =>
         {
             var detector = serviceProvider

@@ -1,5 +1,6 @@
 using SolidarityGrid.Application.Abstractions;
 using SolidarityGrid.Application.Abstractions.Persistence;
+using SolidarityGrid.Application.Payments.Replication;
 using SolidarityGrid.Domain.Payments;
 
 namespace SolidarityGrid.Application.Payments;
@@ -8,13 +9,16 @@ public sealed class SubmitPaymentUseCase(
     IPaymentRepository paymentRepository,
     IUnitOfWork unitOfWork,
     IIdGenerator idGenerator,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    PaymentReplicationCoordinator replicationCoordinator)
 {
     public async Task<SubmitPaymentResult> ExecuteAsync(
         SubmitPaymentCommand command,
+        string correlationId,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
 
         IdempotencyKey idempotencyKey;
         try
@@ -31,7 +35,11 @@ public sealed class SubmitPaymentUseCase(
             await paymentRepository.GetByIdempotencyKeyAsync(
                 idempotencyKey,
                 cancellationToken);
-        var existingResult = EvaluateExisting(existingPayment, command);
+        var existingResult = await EvaluateExistingAsync(
+            existingPayment,
+            command,
+            correlationId,
+            cancellationToken);
         if (existingResult is not null)
         {
             return existingResult;
@@ -47,7 +55,11 @@ public sealed class SubmitPaymentUseCase(
         try
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
-            return SubmitPaymentResult.Created(PaymentMapper.ToDto(payment));
+            return await ReplicateAsync(
+                payment,
+                correlationId,
+                isReplay: false,
+                cancellationToken);
         }
         catch (DuplicatePaymentIdempotencyKeyException exception)
         {
@@ -62,25 +74,59 @@ public sealed class SubmitPaymentUseCase(
                     exception);
             }
 
-            return EvaluateExisting(winningPayment, command) ??
+            return await EvaluateExistingAsync(
+                winningPayment,
+                command,
+                correlationId,
+                cancellationToken) ??
                 throw new PaymentIdempotencyRaceException(
                     idempotencyKey,
                     exception);
         }
     }
 
-    private static SubmitPaymentResult? EvaluateExisting(
+    private async Task<SubmitPaymentResult?> EvaluateExistingAsync(
         Payment? existingPayment,
-        SubmitPaymentCommand command) =>
-        PaymentIdempotencyPolicy.Evaluate(existingPayment, command) switch
+        SubmitPaymentCommand command,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        var decision = PaymentIdempotencyPolicy.Evaluate(existingPayment, command);
+        return decision switch
         {
             PaymentIdempotencyDecision.CreateNew => null,
             PaymentIdempotencyDecision.ReplayExisting =>
-                SubmitPaymentResult.Replayed(PaymentMapper.ToDto(existingPayment!)),
+                await ReplicateAsync(
+                    existingPayment!,
+                    correlationId,
+                    isReplay: true,
+                    cancellationToken),
             PaymentIdempotencyDecision.Conflict =>
                 SubmitPaymentResult.Conflict(
                     "The idempotency key was already used with a different payment payload."),
             _ => throw new InvalidOperationException(
                 "Unknown payment idempotency decision."),
         };
+    }
+
+    private async Task<SubmitPaymentResult> ReplicateAsync(
+        Payment payment,
+        string correlationId,
+        bool isReplay,
+        CancellationToken cancellationToken)
+    {
+        var outcome = await replicationCoordinator.EnsureReplicatedAsync(
+            payment,
+            correlationId,
+            cancellationToken);
+        var dto = PaymentMapper.ToDto(payment);
+        if (!outcome.QuorumReached)
+        {
+            return SubmitPaymentResult.ReplicationUnavailable(dto);
+        }
+
+        return isReplay
+            ? SubmitPaymentResult.Replayed(dto)
+            : SubmitPaymentResult.Created(dto);
+    }
 }

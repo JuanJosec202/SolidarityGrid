@@ -9,20 +9,24 @@ public sealed class SubmitPaymentResult
         string? errorMessage)
     {
         var requiresPayment =
-            outcome is SubmitPaymentOutcome.Created or SubmitPaymentOutcome.Replayed;
+            outcome is SubmitPaymentOutcome.Created or
+                SubmitPaymentOutcome.Replayed or
+                SubmitPaymentOutcome.ReplicationUnavailable;
         if (requiresPayment != (payment is not null))
         {
             throw new ArgumentException(
-                "Created and replayed results require exactly one payment.",
+                "Successful and replication unavailable results require one payment.",
                 nameof(payment));
         }
 
         var requiresError =
-            outcome is SubmitPaymentOutcome.Conflict or SubmitPaymentOutcome.Invalid;
+            outcome is SubmitPaymentOutcome.Conflict or
+                SubmitPaymentOutcome.Invalid or
+                SubmitPaymentOutcome.ReplicationUnavailable;
         if (requiresError != !string.IsNullOrWhiteSpace(errorCode))
         {
             throw new ArgumentException(
-                "Conflict and invalid results require exactly one error code.",
+                "Error outcomes require exactly one error code.",
                 nameof(errorCode));
         }
 
@@ -45,6 +49,13 @@ public sealed class SubmitPaymentResult
 
     public static SubmitPaymentResult Replayed(PaymentDto payment) =>
         new(SubmitPaymentOutcome.Replayed, payment, null, null);
+
+    public static SubmitPaymentResult ReplicationUnavailable(PaymentDto payment) =>
+        new(
+            SubmitPaymentOutcome.ReplicationUnavailable,
+            payment,
+            Replication.PaymentReplicaErrorCodes.QuorumUnavailable,
+            "A durable payment quorum is not currently available.");
 
     public static SubmitPaymentResult Conflict(string message) =>
         new(

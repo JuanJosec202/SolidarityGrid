@@ -6,6 +6,8 @@ option csharp_namespace = "SolidarityGrid.Contracts.Mesh.V1";
 
 service MeshControl {
   rpc Probe(ProbeRequest) returns (ProbeResponse);
+  rpc ReplicatePayment(ReplicatePaymentRequest)
+      returns (ReplicatePaymentResponse);
 }
 
 message ProbeRequest {
@@ -20,4 +22,26 @@ message ProbeResponse {
   string responder_instance_id = 2;
   int32 protocol_version = 3;
   int64 received_at_unix_milliseconds = 4;
+}
+
+message ReplicatePaymentRequest {
+  string caller_node_id = 1;
+  string caller_instance_id = 2;
+  int32 protocol_version = 3;
+  string payment_id = 4;
+  string idempotency_key = 5;
+  string amount = 6;
+  string currency = 7;
+  int64 created_at_utc_ticks = 8;
+  int64 replicated_at_utc_ticks = 9;
+}
+
+message ReplicatePaymentResponse {
+  string responder_node_id = 1;
+  string responder_instance_id = 2;
+  string payment_id = 3;
+  bool stored = 4;
+  bool already_existed = 5;
+  string status = 6;
+  int64 version = 7;
 }

@@ -2,6 +2,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using SolidarityGrid.Application.Payments.Replication;
+using SolidarityGrid.Domain.Payments;
 
 namespace SolidarityGrid.IntegrationTests;
 
@@ -50,6 +54,13 @@ public class ValidNodeFactory : WebApplicationFactory<Program>
                 ["Persistence:BusyTimeoutMilliseconds"] = "5000",
             });
         });
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IPaymentReplicaTransport>();
+            services.AddSingleton<
+                IPaymentReplicaTransport,
+                SuccessfulReplicaTransport>();
+        });
     }
 
     protected override void Dispose(bool disposing)
@@ -74,6 +85,33 @@ public class ValidNodeFactory : WebApplicationFactory<Program>
         if (Directory.Exists(databaseDirectory))
         {
             Directory.Delete(databaseDirectory, recursive: true);
+        }
+    }
+
+    private sealed class SuccessfulReplicaTransport : IPaymentReplicaTransport
+    {
+        public Task<IReadOnlyCollection<PaymentReplicaResult>> ReplicateAsync(
+            PaymentReplica replica,
+            string correlationId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IReadOnlyCollection<PaymentReplicaResult> results =
+            [
+                new(
+                    new NodeId("peer-one"),
+                    true,
+                    false,
+                    null,
+                    null),
+                new(
+                    new NodeId("peer-two"),
+                    true,
+                    false,
+                    null,
+                    null),
+            ];
+            return Task.FromResult(results);
         }
     }
 }
