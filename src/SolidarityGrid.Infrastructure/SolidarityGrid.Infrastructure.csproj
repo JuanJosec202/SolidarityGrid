@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\SolidarityGrid.Application\SolidarityGrid.Application.csproj" />
+    <ProjectReference Include="..\SolidarityGrid.Contracts\SolidarityGrid.Contracts.csproj" />
+    <ProjectReference Include="..\SolidarityGrid.Domain\SolidarityGrid.Domain.csproj" />
+  </ItemGroup>
+</Project>

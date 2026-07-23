@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feature/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore ./SolidarityGrid.sln
+
+      - name: Verify formatting
+        run: dotnet format ./SolidarityGrid.sln --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build ./SolidarityGrid.sln --no-restore
+
+      - name: Test
+        run: dotnet test ./SolidarityGrid.sln --no-build
+
+      - name: Validate Docker Compose
+        run: docker compose config
+
+      - name: Build node image
+        run: docker build --tag solidaritygrid-node:ci .

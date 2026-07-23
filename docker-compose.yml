@@ -1,0 +1,66 @@
+name: solidarity-grid
+
+x-node-base: &node-base
+  image: solidaritygrid-node:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  networks:
+    - solidarity-grid
+  healthcheck:
+    test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/health/live"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 10s
+
+services:
+  node-a:
+    <<: *node-base
+    ports:
+      - "5101:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Node__NodeId: node-a
+      Node__PublicUrl: http://localhost:5101
+      Node__InternalUrl: http://node-a:8080
+      Node__Environment: Development
+      Node__Peers__0__NodeId: node-b
+      Node__Peers__0__Url: http://node-b:8080
+      Node__Peers__1__NodeId: node-c
+      Node__Peers__1__Url: http://node-c:8080
+
+  node-b:
+    <<: *node-base
+    ports:
+      - "5102:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Node__NodeId: node-b
+      Node__PublicUrl: http://localhost:5102
+      Node__InternalUrl: http://node-b:8080
+      Node__Environment: Development
+      Node__Peers__0__NodeId: node-a
+      Node__Peers__0__Url: http://node-a:8080
+      Node__Peers__1__NodeId: node-c
+      Node__Peers__1__Url: http://node-c:8080
+
+  node-c:
+    <<: *node-base
+    ports:
+      - "5103:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Node__NodeId: node-c
+      Node__PublicUrl: http://localhost:5103
+      Node__InternalUrl: http://node-c:8080
+      Node__Environment: Development
+      Node__Peers__0__NodeId: node-a
+      Node__Peers__0__Url: http://node-a:8080
+      Node__Peers__1__NodeId: node-b
+      Node__Peers__1__Url: http://node-b:8080
+
+networks:
+  solidarity-grid:
+    driver: bridge
