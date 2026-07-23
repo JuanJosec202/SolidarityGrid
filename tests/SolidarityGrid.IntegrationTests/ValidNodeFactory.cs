@@ -5,7 +5,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace SolidarityGrid.IntegrationTests;
 
-public sealed class ValidNodeFactory : WebApplicationFactory<Program>
+public class ValidNodeFactory : WebApplicationFactory<Program>
 {
     private readonly string _databaseDirectory;
     private readonly string _nodeId;
@@ -36,12 +36,13 @@ public sealed class ValidNodeFactory : WebApplicationFactory<Program>
             {
                 ["Node:NodeId"] = _nodeId,
                 ["Node:PublicUrl"] = "http://localhost:5999",
-                ["Node:InternalUrl"] = "http://test-node:8080",
+                ["Node:InternalUrl"] = "http://test-node:8081",
                 ["Node:Environment"] = "IntegrationTest",
                 ["Node:Peers:0:NodeId"] = "peer-one",
-                ["Node:Peers:0:Url"] = "http://peer-one:8080",
+                ["Node:Peers:0:Url"] = "http://peer-one:8081",
                 ["Node:Peers:1:NodeId"] = "peer-two",
-                ["Node:Peers:1:Url"] = "http://peer-two:8080",
+                ["Node:Peers:1:Url"] = "http://peer-two:8081",
+                ["Mesh:ProbeTimeoutMilliseconds"] = "1000",
                 ["Persistence:DatabasePath"] = DatabasePath,
                 ["Persistence:BusyTimeoutMilliseconds"] = "5000",
             });

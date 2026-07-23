@@ -5,11 +5,16 @@
 .github/
 .vs/
 .idea/
+.config/
 coverage/
 logs/
+scripts/
+tests/
 *.db
 *.db-shm
 *.db-wal
 docker-compose.yml
+SolidarityGrid.http
+SolidarityGrid.sln
 README.md
 docs/

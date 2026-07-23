@@ -24,9 +24,8 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /app/publish ./
 
-ENV ASPNETCORE_HTTP_PORTS= \
-    ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
+EXPOSE 8081
 USER app
 
 ENTRYPOINT ["dotnet", "SolidarityGrid.Node.dll"]

@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package solidaritygrid.mesh.v1;
+
+option csharp_namespace = "SolidarityGrid.Contracts.Mesh.V1";
+
+service MeshControl {
+  rpc Probe(ProbeRequest) returns (ProbeResponse);
+}
+
+message ProbeRequest {
+  string caller_node_id = 1;
+  string caller_instance_id = 2;
+  int32 protocol_version = 3;
+  int64 sent_at_unix_milliseconds = 4;
+}
+
+message ProbeResponse {
+  string responder_node_id = 1;
+  string responder_instance_id = 2;
+  int32 protocol_version = 3;
+  int64 received_at_unix_milliseconds = 4;
+}

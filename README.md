@@ -6,7 +6,8 @@ SolidarityGrid será una red P2P de procesadores de pagos resilientes. El Slice 
 estableció su fundación técnica y el Slice 1 incorporó el dominio del pago, su
 máquina de estados y las reglas de idempotencia. El Slice 2 aporta persistencia
 SQLite durable e independiente por nodo. El Slice 3 expone una API pública
-idempotente para crear y consultar pagos locales.
+idempotente para crear y consultar pagos locales. El Slice 4 agrega transporte
+mesh directo mediante gRPC, sin cambiar el carácter local de los pagos.
 
 ## Slices completados
 
@@ -17,6 +18,8 @@ idempotente para crear y consultar pagos locales.
   y concurrencia optimista.
 - Slice 3: `POST /pay`, consulta por ID, replay durable y contratos Problem
   Details.
+- Slice 4: contrato protobuf versionado, `Probe` gRPC, identidad de proceso,
+  canales HTTP/2 reutilizables y diagnóstico de conectividad.
 
 ## Requisitos
 
@@ -47,7 +50,44 @@ volúmenes son independientes.
 - node-c: <http://localhost:5103>
 
 Cada nodo expone `/`, `/node`, `/health/live`, `/health/ready`, `POST /pay` y
-`GET /payments/{paymentId}`.
+`GET /payments/{paymentId}` en su puerto público HTTP/1.1. También expone
+`GET /mesh/peers` para ejecutar un probe bajo demanda.
+
+## Comunicación mesh
+
+Los nodos se comunican directamente mediante gRPC sobre HTTP/2, sin broker ni
+service mesh externo. Kestrel separa la API pública en el puerto interno `8080`
+del transporte gRPC en `8081`. Docker publica únicamente `8080`; `8081` queda
+expuesto solo dentro de la red de Compose.
+
+Infrastructure mantiene un `GrpcChannel` reutilizable por URI de peer. Cada
+probe tiene deadline, respeta cancelación y consulta los dos peers en paralelo,
+sin retries automáticos.
+
+## Probe
+
+```http
+GET /mesh/peers
+```
+
+La respuesta siempre contiene un resultado por peer. Una caída se representa
+con `isReachable=false` y un código neutral como
+`MESH_PEER_UNREACHABLE`, `MESH_DEADLINE_EXCEEDED`,
+`MESH_PROTOCOL_MISMATCH` o `MESH_IDENTITY_MISMATCH`; no convierte la respuesta
+completa en 500 ni afecta readiness.
+
+## Identidad mesh
+
+`NodeId` es estable y proviene de configuración. `InstanceId` se genera una vez
+por proceso, permanece estable durante esa ejecución y cambia cuando el
+contenedor reinicia. El cliente valida NodeId, InstanceId y versión de protocolo
+de cada respuesta.
+
+## Seguridad mesh
+
+El PoC confía en la red interna de Docker. NodeId no es autenticación
+criptográfica. En producción se requeriría mTLS o identidad de workload para
+impedir la suplantación de NodeId.
 
 ## API pública
 
@@ -105,6 +145,17 @@ Con los contenedores activos:
 
 ```bash
 ./scripts/demo-api.sh
+```
+
+Para demostrar conectividad mesh, aislamiento de una caída y cambio de
+`InstanceId` al reiniciar `node-b`:
+
+```powershell
+.\scripts\demo-mesh.ps1
+```
+
+```bash
+./scripts/demo-mesh.sh
 ```
 
 ## Persistencia local por nodo
@@ -189,18 +240,21 @@ La decisión completa está documentada en
 [ADR 0002: Payment lifecycle and idempotency](docs/adr/0002-payment-lifecycle-and-idempotency.md).
 El contrato público está documentado en
 [ADR 0004: Idempotent payment HTTP API](docs/adr/0004-idempotent-payment-http-api.md).
+El transporte interno está documentado en
+[ADR 0005: Direct gRPC mesh transport](docs/adr/0005-direct-grpc-mesh-transport.md).
 
 ## Limitación actual
 
-La idempotencia es local por nodo. Todavía no existen replicación, gRPC,
-heartbeats, procesamiento ni failover. Enviar la misma clave a otro nodo puede
-crear una copia independiente; la convergencia se resolverá en un slice
-posterior.
+La idempotencia sigue siendo local por nodo. El probe no es un heartbeat y
+`reachable` no equivale a consenso. Todavía no existen heartbeats periódicos,
+replicación, quorum, procesamiento, detección persistente de fallos ni failover.
+Enviar la misma clave a otro nodo puede crear una copia independiente; la
+convergencia se resolverá en un slice posterior.
 
 ## Roadmap
 
-- Comunicación directa entre peers.
-- Detección de fallos y coordinación.
+- Detección de reinicios y fallos mediante observación explícita.
+- Replicación y coordinación con quorum.
 - Replicación, recuperación y observabilidad distribuida.
 - Pipeline de demostración y pruebas de caos.
 

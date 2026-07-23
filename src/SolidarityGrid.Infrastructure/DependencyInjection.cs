@@ -5,7 +5,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using SolidarityGrid.Application.Abstractions.Persistence;
 using SolidarityGrid.Application.Abstractions;
+using SolidarityGrid.Application.Mesh;
 using SolidarityGrid.Infrastructure.Identifiers;
+using SolidarityGrid.Infrastructure.Mesh;
+using SolidarityGrid.Infrastructure.Mesh.Configuration;
 using SolidarityGrid.Infrastructure.Persistence;
 using SolidarityGrid.Infrastructure.Persistence.Configuration;
 using SolidarityGrid.Infrastructure.Persistence.Health;
@@ -39,6 +42,16 @@ public static class DependencyInjection
             PersistenceOptionsValidator>();
         services.AddSingleton<SqliteConnectionInterceptor>();
         services.AddSingleton<IIdGenerator, SystemIdGenerator>();
+        services
+            .AddOptions<MeshTransportOptions>()
+            .Bind(configuration.GetRequiredSection(MeshTransportOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddSingleton<
+            IValidateOptions<MeshTransportOptions>,
+            MeshTransportOptionsValidator>();
+        services.AddSingleton<GrpcMeshChannelPool>();
+        services.AddSingleton<IMeshPeerProbe, GrpcMeshPeerProbe>();
         services.AddDbContextFactory<SolidarityGridDbContext>((serviceProvider, options) =>
         {
             var persistenceOptions = serviceProvider

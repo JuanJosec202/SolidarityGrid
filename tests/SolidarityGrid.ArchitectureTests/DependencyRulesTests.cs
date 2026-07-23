@@ -258,13 +258,162 @@ public sealed class DependencyRulesTests
     }
 
     [Fact]
-    public void ProductionContainsNoGrpcOrServiceLocator()
+    public void ProductionContainsNoServiceLocator()
     {
         var source = ReadSourceFiles(Path.Combine(FindRepositoryRoot(), "src"));
 
-        Assert.DoesNotContain("Grpc.", source, StringComparison.Ordinal);
         Assert.DoesNotContain("RequestServices", source, StringComparison.Ordinal);
         Assert.DoesNotContain("GetService<", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ApplicationContainsNoGrpcOrTransportImplementation()
+    {
+        var applicationPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Application");
+        var source = ReadSourceFiles(applicationPath);
+        string[] forbiddenTerms =
+        [
+            "GrpcChannel",
+            "RpcException",
+            "ServerCallContext",
+            "Google.Protobuf",
+            "HttpProtocols",
+            "NodeOptions",
+            "SocketsHttpHandler",
+        ];
+
+        Assert.All(
+            forbiddenTerms,
+            term => Assert.DoesNotContain(term, source, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MeshProtoDefinesOnlyProbeRpc()
+    {
+        var protoPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Contracts",
+            "Protos",
+            "mesh_control.proto");
+        var proto = File.ReadAllText(protoPath);
+        var rpcLines = proto
+            .Split('\n')
+            .Where(line => line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.Single(rpcLines);
+        Assert.Contains("rpc Probe(", rpcLines[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GrpcServerAndClientStayInTheirOwnedLayers()
+    {
+        var root = FindRepositoryRoot();
+        Assert.True(File.Exists(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Node",
+            "Mesh",
+            "MeshControlGrpcService.cs")));
+        Assert.True(File.Exists(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Infrastructure",
+            "Mesh",
+            "GrpcMeshPeerProbe.cs")));
+
+        var infrastructureProject = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Infrastructure",
+            "SolidarityGrid.Infrastructure.csproj"));
+        Assert.DoesNotContain(
+            "SolidarityGrid.Node",
+            infrastructureProject,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DockerPublishesOnlyPublicPortAndUsesInternalMeshPort()
+    {
+        var root = FindRepositoryRoot();
+        var compose = File.ReadAllText(Path.Combine(root, "docker-compose.yml"));
+        var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
+
+        Assert.Contains("\"5101:8080\"", compose, StringComparison.Ordinal);
+        Assert.Contains("http://node-b:8081", compose, StringComparison.Ordinal);
+        Assert.DoesNotContain(":8081:8081", compose, StringComparison.Ordinal);
+        Assert.Contains("EXPOSE 8080", dockerfile, StringComparison.Ordinal);
+        Assert.Contains("EXPOSE 8081", dockerfile, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void KestrelSeparatesPublicAndMeshProtocols()
+    {
+        var program = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Node",
+            "Program.cs"));
+
+        Assert.Contains("ListenAnyIP(8080", program, StringComparison.Ordinal);
+        Assert.Contains("HttpProtocols.Http1", program, StringComparison.Ordinal);
+        Assert.Contains("ListenAnyIP(8081", program, StringComparison.Ordinal);
+        Assert.Contains("HttpProtocols.Http2", program, StringComparison.Ordinal);
+        Assert.Contains("RequireHost(\"*:8081\"", program, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NodeDoesNotOwnGrpcClientOrPaymentMeshLogic()
+    {
+        var nodePath = Path.Combine(FindRepositoryRoot(), "src", "SolidarityGrid.Node");
+        var nodeSource = ReadSourceFiles(nodePath);
+        var serviceSource = File.ReadAllText(Path.Combine(
+            nodePath,
+            "Mesh",
+            "MeshControlGrpcService.cs"));
+
+        Assert.DoesNotContain("GrpcChannel", nodeSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("MeshControlClient", nodeSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("PaymentRepository", serviceSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("SubmitPayment", serviceSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReplicatePayment", serviceSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MeshClientHasNoRetryOrHeartbeatImplementation()
+    {
+        var meshPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Infrastructure",
+            "Mesh");
+        var source = ReadSourceFiles(meshPath);
+
+        Assert.DoesNotContain("Polly", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Retry", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("BackgroundService", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("HeartbeatService", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReplicatePayment", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MeshChannelPoolHasNoStaticChannelState()
+    {
+        var fields = typeof(SolidarityGrid.Infrastructure.Mesh.GrpcMeshChannelPool)
+            .GetFields(BindingFlags.Instance | BindingFlags.Static |
+                       BindingFlags.NonPublic | BindingFlags.Public);
+
+        Assert.DoesNotContain(
+            fields,
+            field => field.IsStatic &&
+                     field.FieldType.FullName?.Contains(
+                         "GrpcChannel",
+                         StringComparison.Ordinal) == true);
     }
 
     private static void AssertHasNoReferences(Assembly assembly, params string[] forbiddenPrefixes)

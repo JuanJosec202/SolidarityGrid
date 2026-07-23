@@ -8,6 +8,8 @@ x-node-base: &node-base
   restart: unless-stopped
   networks:
     - solidarity-grid
+  expose:
+    - "8081"
   healthcheck:
     test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/health/live"]
     interval: 5s
@@ -24,12 +26,13 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       Node__NodeId: node-a
       Node__PublicUrl: http://localhost:5101
-      Node__InternalUrl: http://node-a:8080
+      Node__InternalUrl: http://node-a:8081
       Node__Environment: Development
       Node__Peers__0__NodeId: node-b
-      Node__Peers__0__Url: http://node-b:8080
+      Node__Peers__0__Url: http://node-b:8081
       Node__Peers__1__NodeId: node-c
-      Node__Peers__1__Url: http://node-c:8080
+      Node__Peers__1__Url: http://node-c:8081
+      Mesh__ProbeTimeoutMilliseconds: 1000
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:
@@ -43,12 +46,13 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       Node__NodeId: node-b
       Node__PublicUrl: http://localhost:5102
-      Node__InternalUrl: http://node-b:8080
+      Node__InternalUrl: http://node-b:8081
       Node__Environment: Development
       Node__Peers__0__NodeId: node-a
-      Node__Peers__0__Url: http://node-a:8080
+      Node__Peers__0__Url: http://node-a:8081
       Node__Peers__1__NodeId: node-c
-      Node__Peers__1__Url: http://node-c:8080
+      Node__Peers__1__Url: http://node-c:8081
+      Mesh__ProbeTimeoutMilliseconds: 1000
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:
@@ -62,12 +66,13 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       Node__NodeId: node-c
       Node__PublicUrl: http://localhost:5103
-      Node__InternalUrl: http://node-c:8080
+      Node__InternalUrl: http://node-c:8081
       Node__Environment: Development
       Node__Peers__0__NodeId: node-a
-      Node__Peers__0__Url: http://node-a:8080
+      Node__Peers__0__Url: http://node-a:8081
       Node__Peers__1__NodeId: node-b
-      Node__Peers__1__Url: http://node-b:8080
+      Node__Peers__1__Url: http://node-b:8081
+      Mesh__ProbeTimeoutMilliseconds: 1000
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:

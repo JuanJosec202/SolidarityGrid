@@ -1,5 +1,6 @@
 @nodeA = http://localhost:5101
 @nodeB = http://localhost:5102
+@nodeC = http://localhost:5103
 @idempotencyKey = PAY-2026-0001
 @paymentId = 00000000-0000-0000-0000-000000000000
 
@@ -44,3 +45,21 @@ GET {{nodeB}}/payments/{{paymentId}}
 
 ### Identidad de node-b
 GET {{nodeB}}/node
+
+### Probe mesh bajo demanda desde node-a
+GET {{nodeA}}/mesh/peers
+X-Correlation-ID: mesh-demo-node-a
+
+### Probe mesh bajo demanda desde node-b
+GET {{nodeB}}/mesh/peers
+X-Correlation-ID: mesh-demo-node-b
+
+### Probe mesh bajo demanda desde node-c
+GET {{nodeC}}/mesh/peers
+X-Correlation-ID: mesh-demo-node-c
+
+### Para observar una caída temporal:
+### docker compose stop node-b
+### Vuelva a ejecutar el probe de node-a; node-b estará unreachable y node-c reachable.
+### docker compose start node-b
+### El nuevo probe mostrará otro remoteInstanceId para node-b.

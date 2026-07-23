@@ -107,4 +107,28 @@ public sealed class NodeEndpointsTests : IClassFixture<ValidNodeFactory>
 
         Assert.Contains("NodeId", exception.ToString(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void InvalidMeshTimeoutPreventsHostStartup()
+    {
+        using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                {
+                    configuration.AddInMemoryCollection(
+                        new Dictionary<string, string?>
+                        {
+                            ["Mesh:ProbeTimeoutMilliseconds"] = "0",
+                        });
+                });
+            });
+
+        var exception = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.Contains(
+            "ProbeTimeoutMilliseconds",
+            exception.ToString(),
+            StringComparison.Ordinal);
+    }
 }
