@@ -58,8 +58,20 @@ X-Correlation-ID: mesh-demo-node-b
 GET {{nodeC}}/mesh/peers
 X-Correlation-ID: mesh-demo-node-c
 
+### Estado cacheado del detector en node-a (no ejecuta gRPC)
+GET {{nodeA}}/mesh/status
+
+### Estado cacheado del detector en node-b
+GET {{nodeB}}/mesh/status
+
+### Estado cacheado del detector en node-c
+GET {{nodeC}}/mesh/status
+
 ### Para observar una caída temporal:
 ### docker compose stop node-b
 ### Vuelva a ejecutar el probe de node-a; node-b estará unreachable y node-c reachable.
 ### docker compose start node-b
 ### El nuevo probe mostrará otro remoteInstanceId para node-b.
+###
+### /mesh/peers ejecuta probes activos bajo demanda.
+### /mesh/status solo lee las observaciones periódicas cacheadas.

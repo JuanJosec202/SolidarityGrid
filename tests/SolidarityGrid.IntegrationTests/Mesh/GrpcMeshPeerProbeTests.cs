@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SolidarityGrid.Application.Mesh;
+using SolidarityGrid.Application.Mesh.Health;
 using SolidarityGrid.Contracts;
 using SolidarityGrid.Contracts.Mesh.V1;
 using SolidarityGrid.Domain.Payments;
@@ -220,6 +221,66 @@ public sealed class GrpcMeshPeerProbeTests
         }
     }
 
+    [Fact]
+    public async Task RealGrpcObservationsProgressRecoverAndDetectRestart()
+    {
+        var behavior = new ProbeBehavior("node-b");
+        await using var server = await TestMeshServer.StartAsync(behavior);
+        var peer = new MeshPeer(new NodeId("node-b"), server.Address);
+        var directory = new StubPeerDirectory([peer]);
+        var identity = new StubMeshNodeIdentity(new NodeId("node-a"), Guid.NewGuid());
+        using var pool = new GrpcMeshChannelPool(directory);
+        var timeProvider = new MutableTimeProvider(DateTimeOffset.UtcNow);
+        var probe = new GrpcMeshPeerProbe(
+            directory,
+            identity,
+            pool,
+            Options.Create(new MeshTransportOptions
+            {
+                ProbeTimeoutMilliseconds = 1_000,
+            }),
+            timeProvider,
+            NullLogger<GrpcMeshPeerProbe>.Instance);
+        var registry = new InMemoryMeshPeerHealthRegistry(
+            [peer],
+            timeProvider.GetUtcNow(),
+            new MeshFailureDetectionThresholds(
+                TimeSpan.FromSeconds(3),
+                TimeSpan.FromSeconds(5)));
+        var monitor = new MeshPeerHealthMonitor(probe, registry, timeProvider);
+
+        await monitor.ObserveOnceAsync("first", CancellationToken.None);
+        Assert.Equal(
+            MeshPeerHealthStatus.Alive,
+            registry.GetSnapshot(peer.NodeId)!.Status);
+
+        behavior.FailureStatus = StatusCode.Unavailable;
+        timeProvider.Advance(TimeSpan.FromSeconds(4));
+        await monitor.ObserveOnceAsync("suspect", CancellationToken.None);
+        Assert.Equal(
+            MeshPeerHealthStatus.Suspected,
+            registry.GetSnapshot(peer.NodeId)!.Status);
+
+        timeProvider.Advance(TimeSpan.FromSeconds(2));
+        await monitor.ObserveOnceAsync("unreachable", CancellationToken.None);
+        Assert.Equal(
+            MeshPeerHealthStatus.Unreachable,
+            registry.GetSnapshot(peer.NodeId)!.Status);
+
+        var previousInstance = behavior.InstanceId;
+        behavior.FailureStatus = StatusCode.OK;
+        behavior.InstanceId = Guid.NewGuid();
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        var recovery = Assert.Single(
+            await monitor.ObserveOnceAsync("recovery", CancellationToken.None));
+
+        Assert.Equal(MeshPeerHealthStatus.Alive, recovery.Current.Status);
+        Assert.True(recovery.Recovered);
+        Assert.True(recovery.RestartDetected);
+        Assert.Equal(previousInstance, recovery.PreviousInstanceId);
+        Assert.Equal(1, recovery.Current.RestartCount);
+    }
+
     private static (GrpcMeshPeerProbe Probe, GrpcMeshChannelPool Pool) CreateProbe(
         IReadOnlyCollection<MeshPeer> peers,
         int timeoutMilliseconds = 1_000)
@@ -257,7 +318,7 @@ public sealed class GrpcMeshPeerProbeTests
 
     private sealed class ProbeBehavior(string responseNodeId)
     {
-        public Guid InstanceId { get; } = Guid.NewGuid();
+        public Guid InstanceId { get; set; } = Guid.NewGuid();
 
         public string ResponseNodeId { get; } = responseNodeId;
 
@@ -266,7 +327,7 @@ public sealed class GrpcMeshPeerProbeTests
         public int ResponseProtocolVersion { get; init; } =
             MeshProtocol.CurrentVersion;
 
-        public StatusCode FailureStatus { get; init; } = StatusCode.OK;
+        public StatusCode FailureStatus { get; set; } = StatusCode.OK;
 
         public TimeSpan Delay { get; init; }
 
@@ -384,6 +445,18 @@ public sealed class GrpcMeshPeerProbeTests
             }
 
             await _allArrived.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan duration)
+        {
+            _utcNow += duration;
         }
     }
 }

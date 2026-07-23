@@ -385,7 +385,7 @@ public sealed class DependencyRulesTests
     }
 
     [Fact]
-    public void MeshClientHasNoRetryOrHeartbeatImplementation()
+    public void MeshClientHasNoRetryOrReplicationImplementation()
     {
         var meshPath = Path.Combine(
             FindRepositoryRoot(),
@@ -396,8 +396,6 @@ public sealed class DependencyRulesTests
 
         Assert.DoesNotContain("Polly", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Retry", source, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("BackgroundService", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("HeartbeatService", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ReplicatePayment", source, StringComparison.Ordinal);
     }
 
@@ -414,6 +412,108 @@ public sealed class DependencyRulesTests
                      field.FieldType.FullName?.Contains(
                          "GrpcChannel",
                          StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void FailureDetectorRespectsLayerOwnership()
+    {
+        var root = FindRepositoryRoot();
+        var application = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Application"));
+        var infrastructure = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Infrastructure"));
+        var node = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Node"));
+
+        Assert.DoesNotContain("BackgroundService", application, StringComparison.Ordinal);
+        Assert.DoesNotContain("IHostedService", application, StringComparison.Ordinal);
+        Assert.DoesNotContain("GrpcChannel", application, StringComparison.Ordinal);
+        Assert.Contains(
+            "MeshHeartbeatBackgroundService",
+            infrastructure,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("MeshPeerHealthMonitor", node, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Delay", node, StringComparison.Ordinal);
+
+        var heartbeatService = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Infrastructure",
+            "Mesh",
+            "MeshHeartbeatBackgroundService.cs"));
+        Assert.DoesNotContain("DbContext", heartbeatService, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "IServiceScopeFactory",
+            heartbeatService,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("CreateScope", heartbeatService, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Run", heartbeatService, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "System.Threading.Timer",
+            heartbeatService,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PeerHealthIsNotPersisted()
+    {
+        var root = FindRepositoryRoot();
+        var persistence = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Infrastructure",
+            "Persistence"));
+
+        Assert.DoesNotContain("MeshPeerHealth", persistence, StringComparison.Ordinal);
+        Assert.DoesNotContain("PeerHealth", persistence, StringComparison.Ordinal);
+        Assert.DoesNotContain("Heartbeat", persistence, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FailureDetectorAddsNoRpcOrPaymentCoordination()
+    {
+        var root = FindRepositoryRoot();
+        var proto = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Contracts",
+            "Protos",
+            "mesh_control.proto"));
+        var nonDomainSource = string.Join(
+            Environment.NewLine,
+            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Application")),
+            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Infrastructure")),
+            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Node")));
+
+        Assert.DoesNotContain("rpc Heartbeat", proto, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReplicatePayment", proto, StringComparison.Ordinal);
+        Assert.Single(
+            proto.Split('\n'),
+            line => line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal));
+        Assert.DoesNotContain("MarkReplicated(", nonDomainSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Takeover", nonDomainSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FailureDetectorUsesNoStaticTimerOrRegistry()
+    {
+        var registryFields = typeof(
+                SolidarityGrid.Application.Mesh.Health.InMemoryMeshPeerHealthRegistry)
+            .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+        var serviceFields = typeof(
+                SolidarityGrid.Infrastructure.Mesh.MeshHeartbeatBackgroundService)
+            .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+
+        Assert.Empty(registryFields);
+        Assert.DoesNotContain(
+            serviceFields,
+            field => field.FieldType == typeof(System.Threading.Timer));
     }
 
     private static void AssertHasNoReferences(Assembly assembly, params string[] forbiddenPrefixes)

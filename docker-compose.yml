@@ -33,6 +33,9 @@ services:
       Node__Peers__1__NodeId: node-c
       Node__Peers__1__Url: http://node-c:8081
       Mesh__ProbeTimeoutMilliseconds: 1000
+      MeshFailureDetector__HeartbeatIntervalMilliseconds: 1000
+      MeshFailureDetector__SuspectAfterMilliseconds: 3000
+      MeshFailureDetector__UnreachableAfterMilliseconds: 5000
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:
@@ -53,6 +56,9 @@ services:
       Node__Peers__1__NodeId: node-c
       Node__Peers__1__Url: http://node-c:8081
       Mesh__ProbeTimeoutMilliseconds: 1000
+      MeshFailureDetector__HeartbeatIntervalMilliseconds: 1000
+      MeshFailureDetector__SuspectAfterMilliseconds: 3000
+      MeshFailureDetector__UnreachableAfterMilliseconds: 5000
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:
@@ -73,6 +79,9 @@ services:
       Node__Peers__1__NodeId: node-b
       Node__Peers__1__Url: http://node-b:8081
       Mesh__ProbeTimeoutMilliseconds: 1000
+      MeshFailureDetector__HeartbeatIntervalMilliseconds: 1000
+      MeshFailureDetector__SuspectAfterMilliseconds: 3000
+      MeshFailureDetector__UnreachableAfterMilliseconds: 5000
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:

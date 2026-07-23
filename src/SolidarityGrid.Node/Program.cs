@@ -58,6 +58,8 @@ builder.Services
 var app = builder.Build();
 var nodeOptions = app.Services.GetRequiredService<IOptions<NodeOptions>>().Value;
 _ = app.Services.GetRequiredService<IOptions<MeshTransportOptions>>().Value;
+_ = app.Services.GetRequiredService<
+    IOptions<MeshFailureDetectorOptions>>().Value;
 _ = app.Services.GetRequiredService<SolidarityGrid.Application.Mesh.IMeshNodeIdentity>();
 _ = app.Services.GetRequiredService<SolidarityGrid.Application.Mesh.IMeshPeerDirectory>();
 var timeProvider = app.Services.GetRequiredService<TimeProvider>();
@@ -98,6 +100,7 @@ app.MapGet("/", () => Results.Ok(new
         ready = "/health/ready",
         node = "/node",
         meshPeers = "/mesh/peers",
+        meshStatus = "/mesh/status",
         submitPayment = "/pay",
     },
 }));

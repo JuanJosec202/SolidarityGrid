@@ -76,6 +76,36 @@ con `isReachable=false` y un código neutral como
 `MESH_PROTOCOL_MISMATCH` o `MESH_IDENTITY_MISMATCH`; no convierte la respuesta
 completa en 500 ni afecta readiness.
 
+## Heartbeats
+
+Cada nodo ejecuta el RPC `Probe` periódicamente contra sus peers, sin retries y
+sin broker. El intervalo predeterminado es 1000 ms. El ciclo siguiente comienza
+solo cuando termina el anterior.
+
+## Estados del detector
+
+- `Unknown`: aún no existe evidencia suficiente.
+- `Alive`: existe una observación válida reciente y no se superó el umbral de
+  sospecha.
+- `Suspected`: los fallos transitorios superaron 3000 ms.
+- `Unreachable`: los fallos superaron 5000 ms o existe un error inmediato de
+  identidad, protocolo o permisos.
+
+Una falla aislada conserva `Alive`, pero incrementa sus contadores y expone el
+último error. `Alive` no implica que la última llamada haya sido exitosa.
+
+## Estado cacheado
+
+`GET /mesh/peers` ejecuta probes activos bajo demanda. `GET /mesh/status` no
+genera tráfico gRPC: devuelve los snapshots cacheados por el detector periódico.
+
+El estado es local y efímero. Al reiniciar el monitor comienza otra vez en
+`Unknown`. Un cambio de `InstanceId` remoto incrementa `RestartCount`, pero ese
+contador no se persiste.
+
+La salud de los peers no participa en `/health/ready`; un nodo con SQLite local
+disponible continúa ready aunque uno o dos peers estén `Unreachable`.
+
 ## Identidad mesh
 
 `NodeId` es estable y proviene de configuración. `InstanceId` se genera una vez
@@ -156,6 +186,16 @@ Para demostrar conectividad mesh, aislamiento de una caída y cambio de
 
 ```bash
 ./scripts/demo-mesh.sh
+```
+
+Para demostrar la línea temporal `Alive → Suspected → Unreachable → Alive`:
+
+```powershell
+.\scripts\demo-heartbeats.ps1
+```
+
+```bash
+./scripts/demo-heartbeats.sh
 ```
 
 ## Persistencia local por nodo
@@ -242,18 +282,19 @@ El contrato público está documentado en
 [ADR 0004: Idempotent payment HTTP API](docs/adr/0004-idempotent-payment-http-api.md).
 El transporte interno está documentado en
 [ADR 0005: Direct gRPC mesh transport](docs/adr/0005-direct-grpc-mesh-transport.md).
+El detector periódico está documentado en
+[ADR 0006: Heartbeat failure detector](docs/adr/0006-heartbeat-failure-detector.md).
 
 ## Limitación actual
 
-La idempotencia sigue siendo local por nodo. El probe no es un heartbeat y
-`reachable` no equivale a consenso. Todavía no existen heartbeats periódicos,
-replicación, quorum, procesamiento, detección persistente de fallos ni failover.
+La idempotencia sigue siendo local por nodo. El detector periódico produce una
+señal local; `Alive` y `Unreachable` no equivalen a consenso ni prueban que un
+proceso murió. Todavía no existen replicación, quorum, procesamiento ni failover.
 Enviar la misma clave a otro nodo puede crear una copia independiente; la
 convergencia se resolverá en un slice posterior.
 
 ## Roadmap
 
-- Detección de reinicios y fallos mediante observación explícita.
 - Replicación y coordinación con quorum.
 - Replicación, recuperación y observabilidad distribuida.
 - Pipeline de demostración y pruebas de caos.

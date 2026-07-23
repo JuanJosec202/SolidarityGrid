@@ -1,4 +1,5 @@
 using SolidarityGrid.Application.Mesh;
+using SolidarityGrid.Application.Mesh.Health;
 using SolidarityGrid.Contracts;
 using SolidarityGrid.Node.Diagnostics;
 
@@ -10,7 +11,41 @@ public static class MeshEndpoints
         this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/mesh/peers", ProbePeersAsync);
+        endpoints.MapGet("/mesh/status", GetStatus);
         return endpoints;
+    }
+
+    private static IResult GetStatus(
+        IMeshNodeIdentity localIdentity,
+        IMeshPeerHealthRegistry registry,
+        TimeProvider timeProvider)
+    {
+        var peers = registry.GetSnapshots()
+            .Select(snapshot => new MeshPeerStatusResponse(
+                snapshot.PeerNodeId.Value,
+                snapshot.InternalUri.AbsoluteUri.TrimEnd('/'),
+                snapshot.Status.ToString(),
+                snapshot.InstanceId,
+                snapshot.MonitoringStartedAtUtc,
+                snapshot.LastProbeStartedAtUtc,
+                snapshot.LastSuccessfulProbeAtUtc,
+                snapshot.LastFailedProbeAtUtc,
+                snapshot.StatusChangedAtUtc,
+                snapshot.ConsecutiveFailures,
+                snapshot.TotalSuccessfulProbes,
+                snapshot.TotalFailedProbes,
+                snapshot.RestartCount,
+                snapshot.LastDuration?.TotalMilliseconds,
+                snapshot.LastErrorCode,
+                snapshot.LastErrorMessage,
+                snapshot.ObservationVersion))
+            .ToArray();
+
+        return Results.Ok(new MeshStatusResponse(
+            localIdentity.NodeId.Value,
+            localIdentity.InstanceId,
+            timeProvider.GetUtcNow(),
+            Array.AsReadOnly(peers)));
     }
 
     private static async Task<IResult> ProbePeersAsync(

@@ -43,6 +43,9 @@ public class ValidNodeFactory : WebApplicationFactory<Program>
                 ["Node:Peers:1:NodeId"] = "peer-two",
                 ["Node:Peers:1:Url"] = "http://peer-two:8081",
                 ["Mesh:ProbeTimeoutMilliseconds"] = "1000",
+                ["MeshFailureDetector:HeartbeatIntervalMilliseconds"] = "30000",
+                ["MeshFailureDetector:SuspectAfterMilliseconds"] = "40000",
+                ["MeshFailureDetector:UnreachableAfterMilliseconds"] = "50000",
                 ["Persistence:DatabasePath"] = DatabasePath,
                 ["Persistence:BusyTimeoutMilliseconds"] = "5000",
             });

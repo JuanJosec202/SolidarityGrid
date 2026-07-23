@@ -131,4 +131,31 @@ public sealed class NodeEndpointsTests : IClassFixture<ValidNodeFactory>
             exception.ToString(),
             StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void InvalidFailureDetectorThresholdsPreventHostStartup()
+    {
+        using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                {
+                    configuration.AddInMemoryCollection(
+                        new Dictionary<string, string?>
+                        {
+                            ["MeshFailureDetector:HeartbeatIntervalMilliseconds"] =
+                                "5000",
+                            ["MeshFailureDetector:SuspectAfterMilliseconds"] =
+                                "3000",
+                        });
+                });
+            });
+
+        var exception = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.Contains(
+            "MeshFailureDetector",
+            exception.ToString(),
+            StringComparison.Ordinal);
+    }
 }

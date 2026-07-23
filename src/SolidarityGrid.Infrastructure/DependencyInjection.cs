@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using SolidarityGrid.Application.Abstractions.Persistence;
 using SolidarityGrid.Application.Abstractions;
 using SolidarityGrid.Application.Mesh;
+using SolidarityGrid.Application.Mesh.Health;
 using SolidarityGrid.Infrastructure.Identifiers;
 using SolidarityGrid.Infrastructure.Mesh;
 using SolidarityGrid.Infrastructure.Mesh.Configuration;
@@ -50,8 +51,34 @@ public static class DependencyInjection
         services.AddSingleton<
             IValidateOptions<MeshTransportOptions>,
             MeshTransportOptionsValidator>();
+        services
+            .AddOptions<MeshFailureDetectorOptions>()
+            .Bind(configuration.GetRequiredSection(
+                MeshFailureDetectorOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddSingleton<
+            IValidateOptions<MeshFailureDetectorOptions>,
+            MeshFailureDetectorOptionsValidator>();
         services.AddSingleton<GrpcMeshChannelPool>();
         services.AddSingleton<IMeshPeerProbe, GrpcMeshPeerProbe>();
+        services.AddSingleton<IMeshPeerHealthRegistry>(serviceProvider =>
+        {
+            var detector = serviceProvider
+                .GetRequiredService<IOptions<MeshFailureDetectorOptions>>()
+                .Value;
+            return new InMemoryMeshPeerHealthRegistry(
+                serviceProvider
+                    .GetRequiredService<IMeshPeerDirectory>()
+                    .GetPeers(),
+                serviceProvider.GetRequiredService<TimeProvider>().GetUtcNow(),
+                new MeshFailureDetectionThresholds(
+                    TimeSpan.FromMilliseconds(detector.SuspectAfterMilliseconds),
+                    TimeSpan.FromMilliseconds(
+                        detector.UnreachableAfterMilliseconds)));
+        });
+        services.AddSingleton<MeshPeerHealthMonitor>();
+        services.AddHostedService<MeshHeartbeatBackgroundService>();
         services.AddDbContextFactory<SolidarityGridDbContext>((serviceProvider, options) =>
         {
             var persistenceOptions = serviceProvider
