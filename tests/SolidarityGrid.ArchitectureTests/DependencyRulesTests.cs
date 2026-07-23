@@ -88,14 +88,93 @@ public sealed class DependencyRulesTests
             "DbContext",
             "EntityFramework",
             "Sqlite",
+            "SqlConnection",
             "ConnectionString",
-            "IRepository",
-            "UnitOfWork",
+            "DbUpdateException",
+            "SqliteErrorCode",
         ];
 
         Assert.All(
             forbiddenTerms,
             term => Assert.DoesNotContain(term, source, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void NodeContainsNoPersistenceImplementation()
+    {
+        var nodePath = Path.Combine(FindRepositoryRoot(), "src", "SolidarityGrid.Node");
+        var source = ReadSourceFiles(nodePath);
+
+        Assert.DoesNotContain("DbContext", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("PaymentRepository", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SolidarityGridUnitOfWork", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InfrastructureReferencesOnlyTheConfiguredEfCoreProvider()
+    {
+        var projectPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Infrastructure",
+            "SolidarityGrid.Infrastructure.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.Contains("Microsoft.EntityFrameworkCore.Sqlite", project, StringComparison.Ordinal);
+        Assert.Contains("Microsoft.EntityFrameworkCore.Design", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("Npgsql", project, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("SqlServer", project, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ProductionCodeHasNoForbiddenPersistencePatterns()
+    {
+        var sourcePath = Path.Combine(FindRepositoryRoot(), "src");
+        var source = ReadSourceFiles(sourcePath);
+        string[] forbiddenTerms =
+        [
+            "GenericRepository",
+            "EnsureCreated",
+            "EnsureDeleted",
+            "BuildServiceProvider",
+            "DateTime.Now",
+            "DateTimeOffset.Now",
+        ];
+
+        Assert.All(
+            forbiddenTerms,
+            term => Assert.DoesNotContain(term, source, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SolutionContainsNoBrokerOrCentralDatabasePackage()
+    {
+        var root = FindRepositoryRoot();
+        var packageFiles = Directory
+            .EnumerateFiles(root, "*.props", SearchOption.TopDirectoryOnly)
+            .Concat(Directory.EnumerateFiles(
+                Path.Combine(root, "src"),
+                "*.csproj",
+                SearchOption.AllDirectories));
+        var packageConfiguration = string.Join(
+            Environment.NewLine,
+            packageFiles.Select(File.ReadAllText));
+        string[] forbiddenPackages =
+        [
+            "RabbitMQ",
+            "Kafka",
+            "MassTransit",
+            "Npgsql",
+            "SqlServer",
+            "Redis",
+        ];
+
+        Assert.All(
+            forbiddenPackages,
+            package => Assert.DoesNotContain(
+                package,
+                packageConfiguration,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     private static void AssertHasNoReferences(Assembly assembly, params string[] forbiddenPrefixes)

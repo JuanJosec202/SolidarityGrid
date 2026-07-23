@@ -2,6 +2,8 @@ using System.Reflection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
+using SolidarityGrid.Infrastructure;
+using SolidarityGrid.Infrastructure.Persistence.Initialization;
 using SolidarityGrid.Node.Configuration;
 using SolidarityGrid.Node.Diagnostics;
 using SolidarityGrid.Node.Health;
@@ -15,6 +17,7 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<NodeOptions>, NodeOptionsValidator>();
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddProblemDetails(options =>
 {
     options.CustomizeProblemDetails = context =>
@@ -36,6 +39,13 @@ builder.Services
 var app = builder.Build();
 var nodeOptions = app.Services.GetRequiredService<IOptions<NodeOptions>>().Value;
 var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+
+await using (var initializationScope = app.Services.CreateAsyncScope())
+{
+    var databaseInitializer = initializationScope.ServiceProvider
+        .GetRequiredService<IDatabaseInitializer>();
+    await databaseInitializer.InitializeAsync(app.Lifetime.ApplicationStopping);
+}
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();

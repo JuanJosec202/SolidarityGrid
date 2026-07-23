@@ -6,6 +6,13 @@ public sealed class Payment
 {
     private readonly List<IDomainEvent> _domainEvents = [];
 
+    // Used only by persistence materializers. It deliberately emits no events.
+    private Payment()
+    {
+        IdempotencyKey = null!;
+        Amount = null!;
+    }
+
     private Payment(
         Guid id,
         IdempotencyKey idempotencyKey,

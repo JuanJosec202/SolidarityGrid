@@ -30,6 +30,10 @@ services:
       Node__Peers__0__Url: http://node-b:8080
       Node__Peers__1__NodeId: node-c
       Node__Peers__1__Url: http://node-c:8080
+      Persistence__DatabasePath: /data/solidarity-grid.db
+      Persistence__BusyTimeoutMilliseconds: 5000
+    volumes:
+      - node-a-data:/data
 
   node-b:
     <<: *node-base
@@ -45,6 +49,10 @@ services:
       Node__Peers__0__Url: http://node-a:8080
       Node__Peers__1__NodeId: node-c
       Node__Peers__1__Url: http://node-c:8080
+      Persistence__DatabasePath: /data/solidarity-grid.db
+      Persistence__BusyTimeoutMilliseconds: 5000
+    volumes:
+      - node-b-data:/data
 
   node-c:
     <<: *node-base
@@ -60,7 +68,16 @@ services:
       Node__Peers__0__Url: http://node-a:8080
       Node__Peers__1__NodeId: node-b
       Node__Peers__1__Url: http://node-b:8080
+      Persistence__DatabasePath: /data/solidarity-grid.db
+      Persistence__BusyTimeoutMilliseconds: 5000
+    volumes:
+      - node-c-data:/data
 
 networks:
   solidarity-grid:
     driver: bridge
+
+volumes:
+  node-a-data:
+  node-b-data:
+  node-c-data:
