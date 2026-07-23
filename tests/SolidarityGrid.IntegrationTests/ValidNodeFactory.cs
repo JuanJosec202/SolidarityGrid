@@ -7,10 +7,26 @@ namespace SolidarityGrid.IntegrationTests;
 
 public sealed class ValidNodeFactory : WebApplicationFactory<Program>
 {
-    private readonly string _databaseDirectory = Path.Combine(
-        Path.GetTempPath(),
-        "SolidarityGrid.Tests",
-        Guid.NewGuid().ToString("N"));
+    private readonly string _databaseDirectory;
+    private readonly string _nodeId;
+    private readonly bool _deleteDatabaseOnDispose;
+
+    public ValidNodeFactory()
+        : this(CreateDatabaseDirectory(), "test-node", deleteDatabaseOnDispose: true)
+    {
+    }
+
+    internal ValidNodeFactory(
+        string databaseDirectory,
+        string nodeId,
+        bool deleteDatabaseOnDispose)
+    {
+        _databaseDirectory = databaseDirectory;
+        _nodeId = nodeId;
+        _deleteDatabaseOnDispose = deleteDatabaseOnDispose;
+    }
+
+    public string DatabasePath => Path.Combine(_databaseDirectory, "node.db");
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -18,7 +34,7 @@ public sealed class ValidNodeFactory : WebApplicationFactory<Program>
         {
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Node:NodeId"] = "test-node",
+                ["Node:NodeId"] = _nodeId,
                 ["Node:PublicUrl"] = "http://localhost:5999",
                 ["Node:InternalUrl"] = "http://test-node:8080",
                 ["Node:Environment"] = "IntegrationTest",
@@ -26,9 +42,7 @@ public sealed class ValidNodeFactory : WebApplicationFactory<Program>
                 ["Node:Peers:0:Url"] = "http://peer-one:8080",
                 ["Node:Peers:1:NodeId"] = "peer-two",
                 ["Node:Peers:1:Url"] = "http://peer-two:8080",
-                ["Persistence:DatabasePath"] = Path.Combine(
-                    _databaseDirectory,
-                    "node.db"),
+                ["Persistence:DatabasePath"] = DatabasePath,
                 ["Persistence:BusyTimeoutMilliseconds"] = "5000",
             });
         });
@@ -38,9 +52,24 @@ public sealed class ValidNodeFactory : WebApplicationFactory<Program>
     {
         base.Dispose(disposing);
         SqliteConnection.ClearAllPools();
-        if (Directory.Exists(_databaseDirectory))
+        if (_deleteDatabaseOnDispose && Directory.Exists(_databaseDirectory))
         {
             Directory.Delete(_databaseDirectory, recursive: true);
+        }
+    }
+
+    public static string CreateDatabaseDirectory() =>
+        Path.Combine(
+            Path.GetTempPath(),
+            "SolidarityGrid.Tests",
+            Guid.NewGuid().ToString("N"));
+
+    public static void DeleteDatabaseDirectory(string databaseDirectory)
+    {
+        SqliteConnection.ClearAllPools();
+        if (Directory.Exists(databaseDirectory))
+        {
+            Directory.Delete(databaseDirectory, recursive: true);
         }
     }
 }

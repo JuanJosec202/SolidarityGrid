@@ -1,15 +1,14 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Options;
-using SolidarityGrid.Node.Configuration;
-
 namespace SolidarityGrid.Node.Health;
 
 public static class HealthResponseWriter
 {
-    public static Task WriteAsync(HttpContext context, HealthReport report)
+    public static Task WriteAsync(
+        HttpContext context,
+        HealthReport report,
+        string nodeId,
+        TimeProvider timeProvider)
     {
-        var nodeOptions = context.RequestServices.GetRequiredService<IOptions<NodeOptions>>().Value;
-        var timeProvider = context.RequestServices.GetRequiredService<TimeProvider>();
         var status = context.Request.Path.Value?.EndsWith("/live", StringComparison.Ordinal) == true
             ? "live"
             : report.Status == HealthStatus.Healthy ? "ready" : "not-ready";
@@ -18,7 +17,7 @@ public static class HealthResponseWriter
             new
             {
                 status,
-                nodeId = nodeOptions.NodeId,
+                nodeId,
                 timestampUtc = timeProvider.GetUtcNow(),
             },
             context.RequestAborted);

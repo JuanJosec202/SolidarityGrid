@@ -5,7 +5,8 @@
 SolidarityGrid será una red P2P de procesadores de pagos resilientes. El Slice 0
 estableció su fundación técnica y el Slice 1 incorporó el dominio del pago, su
 máquina de estados y las reglas de idempotencia. El Slice 2 aporta persistencia
-SQLite durable e independiente por nodo.
+SQLite durable e independiente por nodo. El Slice 3 expone una API pública
+idempotente para crear y consultar pagos locales.
 
 ## Slices completados
 
@@ -14,6 +15,8 @@ SQLite durable e independiente por nodo.
   dominio y política de idempotencia.
 - Slice 2: SQLite local por nodo, migrations, rehidratación, idempotencia durable
   y concurrencia optimista.
+- Slice 3: `POST /pay`, consulta por ID, replay durable y contratos Problem
+  Details.
 
 ## Requisitos
 
@@ -43,7 +46,66 @@ volúmenes son independientes.
 - node-b: <http://localhost:5102>
 - node-c: <http://localhost:5103>
 
-Cada nodo expone `/`, `/node`, `/health/live` y `/health/ready`.
+Cada nodo expone `/`, `/node`, `/health/live`, `/health/ready`, `POST /pay` y
+`GET /payments/{paymentId}`.
+
+## API pública
+
+`POST /pay` recibe un pago y lo guarda localmente en estado `Received`.
+`GET /payments/{paymentId}` consulta el recurso en el mismo nodo. Un identificador
+que no cumple la constraint `:guid` no coincide con la ruta y retorna 404.
+
+## Idempotency-Key
+
+El header `Idempotency-Key` es obligatorio, opaco y case-sensitive. Repetir la
+misma clave con el mismo amount y currency retorna el pago existente sin
+modificarlo. Reutilizarla con otro payload retorna conflicto. La garantía local
+proviene del índice único de SQLite, no solamente de una consulta previa.
+
+## Ejemplos
+
+Curl:
+
+```bash
+curl -i -X POST http://localhost:5101/pay \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: PAY-2026-0001" \
+  -d '{"amount":150000,"currency":"COP"}'
+```
+
+PowerShell:
+
+```powershell
+$headers = @{ "Idempotency-Key" = "PAY-2026-0001" }
+$body = @{ amount = 150000; currency = "COP" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://localhost:5101/pay `
+    -Method Post -Headers $headers -ContentType application/json -Body $body
+```
+
+También puede ejecutarse la colección [SolidarityGrid.http](SolidarityGrid.http).
+
+## Respuestas
+
+- `202 Accepted`: pago creado.
+- `200 OK`: replay compatible o consulta encontrada.
+- `400 Bad Request`: header, payload o JSON inválido.
+- `404 Not Found`: pago ausente en el nodo consultado.
+- `409 Conflict`: clave reutilizada con otro payload.
+
+Todos los errores del endpoint incluyen Problem Details con `code` y
+`correlationId`.
+
+## Script demo
+
+Con los contenedores activos:
+
+```powershell
+.\scripts\demo-api.ps1
+```
+
+```bash
+./scripts/demo-api.sh
+```
 
 ## Persistencia local por nodo
 
@@ -125,13 +187,18 @@ stateDiagram-v2
 
 La decisión completa está documentada en
 [ADR 0002: Payment lifecycle and idempotency](docs/adr/0002-payment-lifecycle-and-idempotency.md).
+El contrato público está documentado en
+[ADR 0004: Idempotent payment HTTP API](docs/adr/0004-idempotent-payment-http-api.md).
 
-Todavía no existen `POST /pay`, replicación, gRPC, heartbeats ni failover. Las
-bases locales pueden divergir porque este slice no implementa convergencia.
+## Limitación actual
+
+La idempotencia es local por nodo. Todavía no existen replicación, gRPC,
+heartbeats, procesamiento ni failover. Enviar la misma clave a otro nodo puede
+crear una copia independiente; la convergencia se resolverá en un slice
+posterior.
 
 ## Roadmap
 
-- API de recepción de pagos.
 - Comunicación directa entre peers.
 - Detección de fallos y coordinación.
 - Replicación, recuperación y observabilidad distribuida.

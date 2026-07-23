@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using SolidarityGrid.Application.Abstractions.Persistence;
+using SolidarityGrid.Application.Abstractions;
+using SolidarityGrid.Infrastructure.Identifiers;
 using SolidarityGrid.Infrastructure.Persistence;
 using SolidarityGrid.Infrastructure.Persistence.Configuration;
 using SolidarityGrid.Infrastructure.Persistence.Health;
@@ -36,6 +38,7 @@ public static class DependencyInjection
             IValidateOptions<PersistenceOptions>,
             PersistenceOptionsValidator>();
         services.AddSingleton<SqliteConnectionInterceptor>();
+        services.AddSingleton<IIdGenerator, SystemIdGenerator>();
         services.AddDbContextFactory<SolidarityGridDbContext>((serviceProvider, options) =>
         {
             var persistenceOptions = serviceProvider

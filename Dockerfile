@@ -17,7 +17,7 @@ RUN dotnet publish src/SolidarityGrid.Node/SolidarityGrid.Node.csproj \
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends curl sqlite3 \
+    && apt-get install --yes --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && install --directory --owner=app --group=app /data
 

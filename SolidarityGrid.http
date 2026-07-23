@@ -1,0 +1,46 @@
+@nodeA = http://localhost:5101
+@nodeB = http://localhost:5102
+@idempotencyKey = PAY-2026-0001
+@paymentId = 00000000-0000-0000-0000-000000000000
+
+### Identidad de node-a
+GET {{nodeA}}/node
+
+### Crear un pago local en node-a
+POST {{nodeA}}/pay
+Content-Type: application/json
+Idempotency-Key: {{idempotencyKey}}
+
+{
+  "amount": 150000,
+  "currency": "COP"
+}
+
+### Replay compatible: mismo ID y 200
+POST {{nodeA}}/pay
+Content-Type: application/json
+Idempotency-Key: {{idempotencyKey}}
+
+{
+  "amount": 150000,
+  "currency": "COP"
+}
+
+### Conflicto: misma clave con otro payload
+POST {{nodeA}}/pay
+Content-Type: application/json
+Idempotency-Key: {{idempotencyKey}}
+
+{
+  "amount": 150001,
+  "currency": "COP"
+}
+
+### Consultar el pago; copie manualmente paymentId de la creación
+GET {{nodeA}}/payments/{{paymentId}}
+
+### node-b tiene almacenamiento independiente y responderá 404 para el ID de node-a
+GET {{nodeB}}/payments/{{paymentId}}
+
+### Identidad de node-b
+GET {{nodeB}}/node

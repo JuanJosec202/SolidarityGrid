@@ -1,12 +1,15 @@
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using SolidarityGrid.Infrastructure;
+using SolidarityGrid.Application;
 using SolidarityGrid.Infrastructure.Persistence.Initialization;
 using SolidarityGrid.Node.Configuration;
 using SolidarityGrid.Node.Diagnostics;
 using SolidarityGrid.Node.Health;
+using SolidarityGrid.Node.Payments;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,8 +19,12 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<NodeOptions>, NodeOptionsValidator>();
-builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+});
 builder.Services.AddProblemDetails(options =>
 {
     options.CustomizeProblemDetails = context =>
@@ -38,6 +45,7 @@ builder.Services
 
 var app = builder.Build();
 var nodeOptions = app.Services.GetRequiredService<IOptions<NodeOptions>>().Value;
+var timeProvider = app.Services.GetRequiredService<TimeProvider>();
 var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
 
 await using (var initializationScope = app.Services.CreateAsyncScope())
@@ -60,6 +68,7 @@ app.MapGet("/", () => Results.Ok(new
         live = "/health/live",
         ready = "/health/ready",
         node = "/node",
+        submitPayment = "/pay",
     },
 }));
 
@@ -75,16 +84,27 @@ app.MapGet("/node", () => Results.Ok(new
         url = peer.Url,
     }),
 }));
+app.MapPaymentEndpoints();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = registration => registration.Tags.Contains("live"),
-    ResponseWriter = HealthResponseWriter.WriteAsync,
+    ResponseWriter = (context, report) =>
+        HealthResponseWriter.WriteAsync(
+            context,
+            report,
+            nodeOptions.NodeId,
+            timeProvider),
 });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
     Predicate = registration => registration.Tags.Contains("ready"),
-    ResponseWriter = HealthResponseWriter.WriteAsync,
+    ResponseWriter = (context, report) =>
+        HealthResponseWriter.WriteAsync(
+            context,
+            report,
+            nodeOptions.NodeId,
+            timeProvider),
 });
 
 app.Lifetime.ApplicationStarted.Register(() =>

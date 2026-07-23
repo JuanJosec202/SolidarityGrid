@@ -35,6 +35,7 @@ public sealed class PaymentRepositoryIntegrationTests
         var repository = new PaymentRepository(context);
         var unitOfWork = new SolidarityGridUnitOfWork(context);
         await repository.AddAsync(payment, CancellationToken.None);
+        Assert.Equal(EntityState.Added, context.Entry(payment).State);
         Assert.Equal(1, await unitOfWork.SaveChangesAsync());
         context.ChangeTracker.Clear();
 

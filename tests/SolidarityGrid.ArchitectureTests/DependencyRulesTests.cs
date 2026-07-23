@@ -177,6 +177,96 @@ public sealed class DependencyRulesTests
                 StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void ApplicationContainsNoHttpOrStaticRuntimeSources()
+    {
+        var applicationPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Application");
+        var source = ReadSourceFiles(applicationPath);
+        string[] forbiddenTerms =
+        [
+            "HttpContext",
+            "IResult",
+            "ProblemDetails",
+            "StatusCodes",
+            "Microsoft.AspNetCore",
+            "Guid.NewGuid",
+            "DateTime.Now",
+            "DateTime.UtcNow",
+            "DateTimeOffset.Now",
+            "DateTimeOffset.UtcNow",
+        ];
+
+        Assert.All(
+            forbiddenTerms,
+            term => Assert.DoesNotContain(term, source, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PaymentEndpointsDependOnlyOnApplicationBoundary()
+    {
+        var endpointsPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Node",
+            "Payments",
+            "PaymentEndpoints.cs");
+        var source = File.ReadAllText(endpointsPath);
+        string[] forbiddenTerms =
+        [
+            "SolidarityGridDbContext",
+            "PaymentRepository",
+            "SqliteConnection",
+            "EntityFrameworkCore",
+            "RequestServices",
+        ];
+
+        Assert.All(
+            forbiddenTerms,
+            term => Assert.DoesNotContain(term, source, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InfrastructureContainsNoHttpEndpoint()
+    {
+        var infrastructurePath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Infrastructure");
+        var source = ReadSourceFiles(infrastructurePath);
+
+        Assert.DoesNotContain("MapPost", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"/pay\"", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProgramContainsNoPaymentIdempotencyLogic()
+    {
+        var programPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "SolidarityGrid.Node",
+            "Program.cs");
+        var source = File.ReadAllText(programPath);
+
+        Assert.DoesNotContain("IdempotencyKey", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("PaymentIdempotencyPolicy", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SubmitPaymentUseCase", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequestServices", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProductionContainsNoGrpcOrServiceLocator()
+    {
+        var source = ReadSourceFiles(Path.Combine(FindRepositoryRoot(), "src"));
+
+        Assert.DoesNotContain("Grpc.", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequestServices", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetService<", source, StringComparison.Ordinal);
+    }
+
     private static void AssertHasNoReferences(Assembly assembly, params string[] forbiddenPrefixes)
     {
         var references = assembly
