@@ -10,6 +10,7 @@ public sealed class CorrelationIdMiddleware(
 {
     public const string HeaderName = "X-Correlation-ID";
     public const string ItemName = "CorrelationId";
+    private const int MaximumLength = 128;
 
     public async Task InvokeAsync(HttpContext context, IOptions<NodeOptions> nodeOptions)
     {
@@ -36,7 +37,7 @@ public sealed class CorrelationIdMiddleware(
         if (headers.TryGetValue(HeaderName, out StringValues values))
         {
             var supplied = values.FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(supplied))
+            if (supplied is not null && IsValid(supplied))
             {
                 return supplied;
             }
@@ -44,4 +45,17 @@ public sealed class CorrelationIdMiddleware(
 
         return Guid.NewGuid().ToString("N");
     }
+
+    private static bool IsValid(string? value) =>
+        value is { Length: > 0 and <= MaximumLength } &&
+        value.All(IsSafeAsciiCharacter);
+
+    private static bool IsSafeAsciiCharacter(char value) =>
+        value is >= 'a' and <= 'z' or
+            >= 'A' and <= 'Z' or
+            >= '0' and <= '9' or
+            '-' or
+            '.' or
+            '_' or
+            ':';
 }

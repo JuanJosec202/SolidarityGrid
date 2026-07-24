@@ -76,6 +76,54 @@ public sealed class NodeEndpointsTests : IClassFixture<ValidNodeFactory>
     }
 
     [Fact]
+    public async Task MaximumLengthSafeCorrelationIdIsPreserved()
+    {
+        using var client = _factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/");
+        var suppliedCorrelationId = new string('a', 128);
+        request.Headers.Add(
+            CorrelationIdMiddleware.HeaderName,
+            suppliedCorrelationId);
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            suppliedCorrelationId,
+            response.Headers.GetValues(CorrelationIdMiddleware.HeaderName).Single());
+    }
+
+    [Theory]
+    [InlineData("over-limit", 129)]
+    [InlineData("contains space", 0)]
+    [InlineData("non-ascii-á", 0)]
+    [InlineData("unsafe/slash", 0)]
+    public async Task InvalidCorrelationIdIsReplacedWithoutRejectingRequest(
+        string suppliedCorrelationId,
+        int generatedLength)
+    {
+        using var client = _factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/");
+        if (generatedLength > 0)
+        {
+            suppliedCorrelationId = new string('a', generatedLength);
+        }
+
+        request.Headers.TryAddWithoutValidation(
+            CorrelationIdMiddleware.HeaderName,
+            suppliedCorrelationId);
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var returnedCorrelationId = response.Headers
+            .GetValues(CorrelationIdMiddleware.HeaderName)
+            .Single();
+        Assert.NotEqual(suppliedCorrelationId, returnedCorrelationId);
+        Assert.True(Guid.TryParseExact(returnedCorrelationId, "N", out _));
+    }
+
+    [Fact]
     public async Task MissingCorrelationIdIsGenerated()
     {
         using var client = _factory.CreateClient();

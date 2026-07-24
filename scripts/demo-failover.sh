@@ -2,18 +2,36 @@
 set -euo pipefail
 
 receiver_port="${1:-5101}"
-timeout_seconds="${2:-45}"
+timeout_seconds="${2:-90}"
 declare -A ports=(["node-a"]=5101 ["node-b"]=5102 ["node-c"]=5103)
 node_ids=(node-a node-b node-c)
-deadline=$((SECONDS + timeout_seconds))
+global_deadline=$((SECONDS + timeout_seconds))
+phase_name="initialization"
+phase_timeout_seconds="$timeout_seconds"
+phase_deadline="$global_deadline"
 
 fail() {
     echo "FAILURE: $1" >&2
     exit 1
 }
 
+begin_phase() {
+    phase_name="$1"
+    phase_timeout_seconds="$2"
+    phase_deadline=$((SECONDS + phase_timeout_seconds))
+    if (( phase_deadline > global_deadline )); then
+        phase_deadline="$global_deadline"
+    fi
+}
+
 check_deadline() {
-    (( SECONDS < deadline )) || fail "global timeout of ${timeout_seconds}s exceeded"
+    if (( SECONDS >= global_deadline )); then
+        fail "global timeout of ${timeout_seconds}s exceeded during phase '${phase_name}'"
+    fi
+
+    if (( SECONDS >= phase_deadline )); then
+        fail "phase '${phase_name}' timeout of ${phase_timeout_seconds}s exceeded"
+    fi
 }
 
 json_string() {
@@ -59,6 +77,7 @@ post_payment() {
     rm -f "$response_file" "$headers_file"
 }
 
+begin_phase "cluster readiness" 30
 all_ready=false
 while [[ "$all_ready" != true ]]; do
     check_deadline
@@ -90,6 +109,7 @@ post_payment "$receiver" "FAILOVER-DEMO"
 payment_id="$(json_string "$POST_BODY" paymentId)"
 [[ -n "$payment_id" ]] || fail "first response has no PaymentId"
 
+begin_phase "initial processing" 20
 initial=""
 while [[ -z "$initial" ]]; do
     check_deadline
@@ -109,6 +129,7 @@ initial_term="$(json_number "$initial" term)"
 initial_attempt="$(json_number "$initial" attempt)"
 [[ "$initial_attempt" == "1" ]] || fail "initial attempt is not 1"
 
+begin_phase "pre-kill lease verification" 10
 sleep 3
 check_deadline
 latest=""
@@ -138,6 +159,7 @@ for node in "${node_ids[@]}"; do
     [[ "$node" != "$initial_owner" ]] && survivors+=("$node")
 done
 
+begin_phase "failure detection" 20
 unreachable_epoch_ms=""
 while [[ -z "$unreachable_epoch_ms" ]]; do
     check_deadline
@@ -167,6 +189,7 @@ while [[ -z "$unreachable_epoch_ms" ]]; do
     fi
 done
 
+begin_phase "ownership takeover" 25
 takeover=""
 takeover_epoch_ms=""
 while [[ -z "$takeover" ]]; do
@@ -199,6 +222,7 @@ second_body="$POST_BODY"
     fail "second POST /pay returned ${second_status}: ${second_body}"
 second_payment_id="$(json_string "$second_body" paymentId)"
 
+begin_phase "payment completion" 25
 completed=false
 while [[ "$completed" != true ]]; do
     check_deadline
