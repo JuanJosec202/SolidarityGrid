@@ -51,7 +51,7 @@ Para detener y eliminar también los datos de la demo:
 docker compose down -v
 ```
 
-## Bonus: Local Pipeline de un solo comando
+## Local Pipeline de un solo comando
 
 El pipeline integral construye la imagen, levanta los tres nodos, espera que
 estén saludables, crea un pago, mata abruptamente al owner, verifica el
@@ -179,6 +179,52 @@ curl -i http://localhost:5101/pay \
 
 También se incluyen ejemplos en [SolidarityGrid.http](SolidarityGrid.http).
 
+## Prueba manual con Postman
+
+Primero levanta el clúster:
+
+```bash
+docker compose up --build -d
+```
+
+En Postman crea una petición `POST` a `http://localhost:5101/pay` con estos
+headers:
+
+```text
+Content-Type: application/json
+Idempotency-Key: POSTMAN-001
+X-Correlation-ID: postman-001
+```
+
+Y este body JSON:
+
+```json
+{
+  "amount": 150000,
+  "currency": "COP"
+}
+```
+
+La respuesta esperada es `202 Accepted` e incluye un `paymentId`. Después de
+ocho a doce segundos, consulta el mismo identificador en los tres nodos:
+
+```text
+GET http://localhost:5101/payments/{paymentId}
+GET http://localhost:5102/payments/{paymentId}
+GET http://localhost:5103/payments/{paymentId}
+```
+
+Los tres nodos deben mostrar el pago como `Completed`. Repetir el mismo
+`POST` con igual `Idempotency-Key` y body debe devolver el mismo pago. La
+demostración automatizada del failover se realiza con `run-poc`; Postman es
+opcional para explorar la API.
+
+Al terminar:
+
+```bash
+docker compose down -v
+```
+
 ## Logs
 
 Los logs JSON permiten seguir la historia por `PaymentId`, `NodeId`,
@@ -217,18 +263,5 @@ dotnet test ./SolidarityGrid.sln
 
 `local-ci` valida el repositorio sin iniciar el escenario chaos. `run-poc`
 demuestra el ciclo distribuido completo.
-
-## Garantías y límites
-
-La PoC proporciona quórum durable 2 de 3, ownership temporal, fencing,
-idempotencia del estado y procesamiento `at-least-once` durante recovery. No
-afirma exactly-once absoluto frente a un proveedor externo, consenso general,
-reconciliación inmediata de un nodo caído ni tolerancia a cualquier partición
-de red.
-
-No hay secretos ni contraseñas en el repositorio y los contenedores se ejecutan
-como usuario no root. Para producción se necesitarían autenticación entre
-nodos, mTLS, gestión de secretos y una integración real con el proveedor de
-pagos.
 
 Las decisiones de diseño están documentadas en [docs/adr](docs/adr).
