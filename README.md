@@ -11,7 +11,7 @@ lo procesaba muere.
 - .NET 8 SDK únicamente para compilar y ejecutar las pruebas fuera de Docker.
 - PowerShell o Bash para los scripts de automatización.
 
-## Requisito mínimo: levantar con un comando
+## Puesta en marcha del proyecto
 
 Desde la raíz del repositorio:
 
@@ -19,7 +19,7 @@ Desde la raíz del repositorio:
 docker compose up --build
 ```
 
-Este único comando:
+Este comando:
 
 - construye una imagen .NET 8 compartida;
 - crea la red privada de Docker;
@@ -263,5 +263,3 @@ dotnet test ./SolidarityGrid.sln
 
 `local-ci` valida el repositorio sin iniciar el escenario chaos. `run-poc`
 demuestra el ciclo distribuido completo.
-
-Las decisiones de diseño están documentadas en [docs/adr](docs/adr).
