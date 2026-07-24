@@ -524,8 +524,14 @@ public sealed class MeshControlGrpcServiceTests
             Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
         {
             base.ConfigureWebHost(builder);
-            builder.ConfigureServices(
-                services => services.AddSingleton<ILoggerProvider>(Logs));
+            builder.ConfigureServices(services =>
+            {
+                services.AddLogging(
+                    logging => logging.AddFilter<ScopeCapturingLoggerProvider>(
+                        category: null,
+                        LogLevel.Debug));
+                services.AddSingleton<ILoggerProvider>(Logs);
+            });
         }
     }
 

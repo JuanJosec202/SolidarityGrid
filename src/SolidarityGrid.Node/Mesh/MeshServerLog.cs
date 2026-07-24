@@ -4,7 +4,7 @@ internal static partial class MeshServerLog
 {
     [LoggerMessage(
         EventId = 4200,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         EventName = "MeshProbeReceived",
         Message = "Mesh probe from {PeerNodeId} ({PeerInstanceId}) was received by {LocalNodeId} ({LocalInstanceId}) using protocol {ProtocolVersion}.")]
     public static partial void ProbeReceived(
@@ -29,7 +29,7 @@ internal static partial class MeshServerLog
 
     [LoggerMessage(
         EventId = 4202,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         EventName = "MeshProbeResponded",
         Message = "Mesh probe response from {LocalNodeId} ({LocalInstanceId}) to {PeerNodeId} completed using protocol {ProtocolVersion}.")]
     public static partial void ProbeResponded(

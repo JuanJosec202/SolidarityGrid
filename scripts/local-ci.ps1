@@ -1,7 +1,3 @@
-param(
-    [switch]$BuildImage
-)
-
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repositoryRoot
 
@@ -38,10 +34,8 @@ try {
     docker compose config
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    if ($BuildImage) {
-        docker compose build
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    }
+    docker compose build
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 finally {
     Pop-Location

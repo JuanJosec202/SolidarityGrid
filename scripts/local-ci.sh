@@ -20,7 +20,4 @@ dotnet tool run dotnet-ef migrations has-pending-model-changes \
     --no-build
 dotnet test ./SolidarityGrid.sln --no-build
 docker compose config
-
-if [[ "${1:-}" == "--build-image" ]]; then
-    docker compose build
-fi
+docker compose build

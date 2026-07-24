@@ -6,7 +6,7 @@ internal static partial class MeshTransportLog
 {
     [LoggerMessage(
         EventId = 4100,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         EventName = "MeshProbeStarted",
         Message = "Mesh probe from {LocalNodeId} ({LocalInstanceId}) to {PeerNodeId} started using protocol {ProtocolVersion}.")]
     public static partial void ProbeStarted(
@@ -18,7 +18,7 @@ internal static partial class MeshTransportLog
 
     [LoggerMessage(
         EventId = 4101,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         EventName = "MeshProbeSucceeded",
         Message = "Mesh probe to {PeerNodeId} ({PeerInstanceId}) succeeded in {DurationMilliseconds} ms using protocol {ProtocolVersion}.")]
     public static partial void ProbeSucceeded(
