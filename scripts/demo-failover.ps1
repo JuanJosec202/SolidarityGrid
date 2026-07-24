@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [int]$ReceiverPort = 5101,
-    [int]$TimeoutSeconds = 45
+    [ValidateRange(30, 600)]
+    [int]$TimeoutSeconds = 90
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,13 +12,65 @@ $nodes = [ordered]@{
     "node-c" = 5103
 }
 $startedAt = Get-Date
-$deadline = $startedAt.AddSeconds($TimeoutSeconds)
+$globalDeadline = $startedAt.AddSeconds($TimeoutSeconds)
+$phaseName = "initialization"
+$phaseTimeoutSeconds = $TimeoutSeconds
+$phaseDeadline = $globalDeadline
+$paymentId = $null
 Add-Type -AssemblyName System.Net.Http
 
-function Assert-InTime {
-    if ((Get-Date) -ge $deadline) {
-        throw "Global timeout of $TimeoutSeconds seconds was exceeded."
+function Start-DemoPhase([string]$Name, [int]$PhaseTimeoutSeconds) {
+    $script:phaseName = $Name
+    $script:phaseTimeoutSeconds = $PhaseTimeoutSeconds
+    $candidateDeadline = (Get-Date).AddSeconds($PhaseTimeoutSeconds)
+    $script:phaseDeadline = if ($candidateDeadline -lt $globalDeadline) {
+        $candidateDeadline
     }
+    else {
+        $globalDeadline
+    }
+
+    Write-Host "Phase: $Name"
+}
+
+function Assert-InTime {
+    $now = Get-Date
+    if ($now -ge $globalDeadline) {
+        throw "Global timeout of $TimeoutSeconds seconds was exceeded during phase '$phaseName'."
+    }
+
+    if ($now -ge $phaseDeadline) {
+        throw "Phase '$phaseName' timeout of $phaseTimeoutSeconds seconds was exceeded."
+    }
+}
+
+function Write-DemoDiagnostics {
+    Write-Host "Diagnostic phase: $phaseName" -ForegroundColor Yellow
+    Write-Host "Docker Compose state:" -ForegroundColor Yellow
+    docker compose ps -a
+
+    if ($paymentId) {
+        Write-Host "Payment snapshots for $paymentId`:" -ForegroundColor Yellow
+        foreach ($nodeId in $nodes.Keys) {
+            try {
+                $snapshot = Get-Payment $nodeId $paymentId
+                Write-Host (
+                    "{0}: Status={1}; Owner={2}; Term={3}; Attempt={4}; Lease={5}" -f
+                    $nodeId,
+                    $snapshot.status,
+                    $snapshot.ownerNodeId,
+                    $snapshot.term,
+                    $snapshot.attempt,
+                    $snapshot.leaseExpiresAtUtc)
+            }
+            catch {
+                Write-Host "$nodeId`: unavailable"
+            }
+        }
+    }
+
+    Write-Host "Recent Docker Compose logs:" -ForegroundColor Yellow
+    docker compose logs --no-color --tail 120
 }
 
 function Get-Json([string]$Url) {
@@ -60,6 +113,7 @@ function Get-PeerStatus([string]$Survivor, [string]$PeerNodeId) {
 }
 
 try {
+    Start-DemoPhase "cluster readiness" 30
     do {
         Assert-InTime
         $allReady = $true
@@ -93,31 +147,52 @@ try {
         throw "ReceiverPort $ReceiverPort does not identify a configured node."
     }
 
-    $created = Submit-Payment $receiverNodeId "FAILOVER-DEMO"
-    if ($created.StatusCode -ne 202) {
-        throw "POST /pay returned $($created.StatusCode): $($created.Body)"
-    }
-
-    $paymentId = [string]$created.Payment.paymentId
     $initial = $null
+    $created = $null
+    $preparationAttempt = 0
     do {
-        Assert-InTime
-        foreach ($nodeId in $nodes.Keys) {
-            try {
-                $candidate = Get-Payment $nodeId $paymentId
-                if ($candidate.status -eq "Processing") {
-                    $initial = $candidate
-                    break
+        $preparationAttempt++
+        Start-DemoPhase "initial processing attempt $preparationAttempt" 20
+        $created = Submit-Payment $receiverNodeId "FAILOVER-DEMO"
+        if ($created.StatusCode -ne 202) {
+            throw "POST /pay returned $($created.StatusCode): $($created.Body)"
+        }
+
+        $paymentId = [string]$created.Payment.paymentId
+        $completedBeforeObservation = $false
+        do {
+            Assert-InTime
+            foreach ($nodeId in $nodes.Keys) {
+                try {
+                    $candidate = Get-Payment $nodeId $paymentId
+                    if ($candidate.status -eq "Processing") {
+                        $initial = $candidate
+                        break
+                    }
+
+                    if ($candidate.status -eq "Completed") {
+                        $completedBeforeObservation = $true
+                    }
+                }
+                catch {
                 }
             }
-            catch {
-            }
-        }
 
-        if ($null -eq $initial) {
-            Start-Sleep -Milliseconds 150
+            if ($null -eq $initial -and -not $completedBeforeObservation) {
+                Start-Sleep -Milliseconds 150
+            }
+        } while ($null -eq $initial -and -not $completedBeforeObservation)
+
+        if ($null -eq $initial -and $completedBeforeObservation) {
+            Write-Host (
+                "Payment $paymentId completed before Processing was observed; " +
+                "retrying setup.")
         }
-    } while ($null -eq $initial)
+    } while ($null -eq $initial -and $preparationAttempt -lt 3)
+
+    if ($null -eq $initial) {
+        throw "Could not observe a payment in Processing after $preparationAttempt attempts."
+    }
 
     $ownerInitial = [string]$initial.ownerNodeId
     $termInitial = [long]$initial.term
@@ -128,6 +203,7 @@ try {
         throw "Initial processing identity is invalid."
     }
 
+    Start-DemoPhase "pre-kill lease verification" 10
     Start-Sleep -Seconds 3
     Assert-InTime
     $latestBeforeKill = $null
@@ -166,6 +242,7 @@ try {
     }
 
     $survivors = @($nodes.Keys | Where-Object { $_ -ne $ownerInitial })
+    Start-DemoPhase "failure detection" 20
     $unreachableAt = $null
     do {
         Assert-InTime
@@ -209,6 +286,7 @@ try {
         }
     } while ($null -eq $unreachableAt)
 
+    Start-DemoPhase "ownership takeover" 25
     $takeover = $null
     $takeoverAt = $null
     do {
@@ -237,6 +315,7 @@ try {
         throw "Second POST /pay returned $($second.StatusCode): $($second.Body)"
     }
 
+    Start-DemoPhase "payment completion" 25
     $finalSnapshots = $null
     do {
         Assert-InTime
@@ -315,6 +394,7 @@ try {
     Write-Host "SUCCESS"
 }
 catch {
-    Write-Error "FAILURE: $($_.Exception.Message)"
+    Write-Host "FAILURE: $($_.Exception.Message)" -ForegroundColor Red
+    Write-DemoDiagnostics
     exit 1
 }

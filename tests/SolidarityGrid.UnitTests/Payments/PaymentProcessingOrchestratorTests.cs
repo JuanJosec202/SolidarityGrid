@@ -12,7 +12,7 @@ public sealed class PaymentProcessingOrchestratorTests
     public async Task HappyPathStartsRenewsAndCompletesAfterRemoteQuorum()
     {
         var fixture = CreateFixture();
-        var payment = CreateReplicated();
+        var payment = CreateReplicated(fixture.TimeProvider);
 
         var result = await fixture.Orchestrator.ProcessAsync(
             payment,
@@ -34,7 +34,7 @@ public sealed class PaymentProcessingOrchestratorTests
     public async Task StartWithoutQuorumDoesNotProcess()
     {
         var fixture = CreateFixture(startSucceeds: false);
-        var payment = CreateReplicated();
+        var payment = CreateReplicated(fixture.TimeProvider);
 
         var result = await fixture.Orchestrator.ProcessAsync(
             payment,
@@ -51,7 +51,7 @@ public sealed class PaymentProcessingOrchestratorTests
     public async Task RenewalWithoutQuorumAbortsBeforeCompletion()
     {
         var fixture = CreateFixture(renewSucceeds: false);
-        var payment = CreateReplicated();
+        var payment = CreateReplicated(fixture.TimeProvider);
 
         var result = await fixture.Orchestrator.ProcessAsync(
             payment,
@@ -69,7 +69,7 @@ public sealed class PaymentProcessingOrchestratorTests
     public async Task CompletionWithoutQuorumLeavesPaymentProcessing()
     {
         var fixture = CreateFixture(completeSucceeds: false);
-        var payment = CreateReplicated();
+        var payment = CreateReplicated(fixture.TimeProvider);
 
         var result = await fixture.Orchestrator.ProcessAsync(
             payment,
@@ -87,7 +87,7 @@ public sealed class PaymentProcessingOrchestratorTests
     public async Task CancellationReturnsCancelledWithoutMutation()
     {
         var fixture = CreateFixture();
-        var payment = CreateReplicated();
+        var payment = CreateReplicated(fixture.TimeProvider);
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
 
@@ -104,7 +104,7 @@ public sealed class PaymentProcessingOrchestratorTests
     public async Task LocalCompletionSaveOccursAfterRemoteCompletion()
     {
         var fixture = CreateFixture();
-        var payment = CreateReplicated();
+        var payment = CreateReplicated(fixture.TimeProvider);
         fixture.UnitOfWork.Payment = payment;
         fixture.UnitOfWork.Operations = fixture.Transport.Operations;
 
@@ -125,7 +125,7 @@ public sealed class PaymentProcessingOrchestratorTests
     public async Task TakeoverReusesFlowWithHigherTermAndSecondAttempt()
     {
         var fixture = CreateFixture();
-        var payment = CreateExpiredProcessing();
+        var payment = CreateExpiredProcessing(fixture.TimeProvider);
         fixture.UnitOfWork.Payment = payment;
         fixture.UnitOfWork.Operations = fixture.Transport.Operations;
 
@@ -177,10 +177,12 @@ public sealed class PaymentProcessingOrchestratorTests
             completeSucceeds);
         var unitOfWork = new RecordingUnitOfWork();
         var observer = new NoOpPaymentCoordinationObserver();
+        var timeProvider = new AutoAdvanceTimeProvider(
+            PaymentTestData.CreatedAt.AddMinutes(1));
         var ownership = new PaymentOwnershipCoordinator(
             transport,
             unitOfWork,
-            TimeProvider.System,
+            timeProvider,
             identity,
             new EmptyDirectory(),
             options,
@@ -189,16 +191,16 @@ public sealed class PaymentProcessingOrchestratorTests
             ownership,
             transport,
             unitOfWork,
-            TimeProvider.System,
+            timeProvider,
             identity,
             options,
             observer);
-        return new Fixture(orchestrator, transport, unitOfWork);
+        return new Fixture(orchestrator, transport, unitOfWork, timeProvider);
     }
 
-    private static Payment CreateReplicated()
+    private static Payment CreateReplicated(TimeProvider timeProvider)
     {
-        var now = TimeProvider.System.GetUtcNow().AddSeconds(-1);
+        var now = timeProvider.GetUtcNow().AddSeconds(-1);
         var payment = Payment.Create(
             PaymentTestData.PaymentId,
             new IdempotencyKey("PROCESS-ORCHESTRATOR"),
@@ -208,9 +210,9 @@ public sealed class PaymentProcessingOrchestratorTests
         return payment;
     }
 
-    private static Payment CreateExpiredProcessing()
+    private static Payment CreateExpiredProcessing(TimeProvider timeProvider)
     {
-        var now = TimeProvider.System.GetUtcNow();
+        var now = timeProvider.GetUtcNow();
         var createdAt = now.AddSeconds(-10);
         var owner = new NodeId("node-b");
         var payment = Payment.Create(
@@ -231,7 +233,8 @@ public sealed class PaymentProcessingOrchestratorTests
     private sealed record Fixture(
         PaymentProcessingOrchestrator Orchestrator,
         FakeTransport Transport,
-        RecordingUnitOfWork UnitOfWork);
+        RecordingUnitOfWork UnitOfWork,
+        TimeProvider TimeProvider);
 
     private sealed class FakeIdentity : IMeshNodeIdentity
     {
@@ -332,6 +335,130 @@ public sealed class PaymentProcessingOrchestratorTests
             }
 
             return Task.FromResult(1);
+        }
+    }
+
+    private sealed class AutoAdvanceTimeProvider(DateTimeOffset utcNow)
+        : TimeProvider
+    {
+        private readonly object _sync = new();
+        private DateTimeOffset _utcNow = utcNow;
+        private long _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_sync)
+            {
+                return _utcNow;
+            }
+        }
+
+        public override long GetTimestamp()
+        {
+            lock (_sync)
+            {
+                return _timestamp;
+            }
+        }
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            ArgumentNullException.ThrowIfNull(callback);
+            return new AutoAdvanceTimer(this, callback, state, dueTime, period);
+        }
+
+        private void Advance(TimeSpan duration)
+        {
+            if (duration <= TimeSpan.Zero ||
+                duration == Timeout.InfiniteTimeSpan)
+            {
+                return;
+            }
+
+            lock (_sync)
+            {
+                _utcNow = _utcNow.Add(duration);
+                _timestamp += duration.Ticks;
+            }
+        }
+
+        private sealed class AutoAdvanceTimer : ITimer
+        {
+            private readonly AutoAdvanceTimeProvider _timeProvider;
+            private readonly TimerCallback _callback;
+            private readonly object? _state;
+            private TimeSpan _period;
+            private int _disposed;
+
+            public AutoAdvanceTimer(
+                AutoAdvanceTimeProvider timeProvider,
+                TimerCallback callback,
+                object? state,
+                TimeSpan dueTime,
+                TimeSpan period)
+            {
+                _timeProvider = timeProvider;
+                _callback = callback;
+                _state = state;
+                _period = period;
+                Schedule(dueTime);
+            }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    return false;
+                }
+
+                _period = period;
+                Schedule(dueTime);
+                return true;
+            }
+
+            public void Dispose() =>
+                Interlocked.Exchange(ref _disposed, 1);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+
+            private void Schedule(TimeSpan dueTime)
+            {
+                if (dueTime == Timeout.InfiniteTimeSpan)
+                {
+                    return;
+                }
+
+                _timeProvider.Advance(dueTime);
+                _ = ThreadPool.QueueUserWorkItem(
+                    static timer => ((AutoAdvanceTimer)timer!).Invoke(),
+                    this);
+            }
+
+            private void Invoke()
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    return;
+                }
+
+                _callback(_state);
+                if (_period != Timeout.InfiniteTimeSpan &&
+                    _period > TimeSpan.Zero &&
+                    Volatile.Read(ref _disposed) == 0)
+                {
+                    Schedule(_period);
+                }
+            }
         }
     }
 }
