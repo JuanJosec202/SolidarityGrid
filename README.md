@@ -1,56 +1,61 @@
 # SolidarityGrid
 
-SolidarityGrid es una prueba de concepto de procesamiento resiliente de pagos
-con .NET 8. El repositorio prioriza una entrega reproducible: tres nodos
-idénticos, una demo de failover de un comando, pruebas automatizadas y ninguna
-dependencia de infraestructura externa.
+SolidarityGrid es una prueba de concepto en .NET 8 de una red distribuida de
+procesadores de pagos. Tres nodos idénticos se coordinan directamente, sin
+broker ni base de datos central, para completar un pago incluso si el nodo que
+lo procesaba muere.
 
-## Problema
+## Requisitos
 
-Un cliente puede enviar un pago a cualquiera de tres nodos. Cada pago tarda
-ocho segundos en procesarse y debe sobrevivir a la caída abrupta de su owner.
-Los nodos se coordinan directamente, sin broker ni base de datos central.
+- Docker Engine o Docker Desktop con Docker Compose.
+- .NET 8 SDK únicamente para compilar y ejecutar las pruebas fuera de Docker.
+- PowerShell o Bash para los scripts de automatización.
 
-Antes de procesar, el pago queda durable en quorum 2 de 3. Si el owner muere,
-los heartbeats lo marcan `Unreachable`; al expirar su lease, un superviviente
-adquiere ownership con un term superior, repite el trabajo y completa el mismo
-pago de forma idempotente.
+## Requisito mínimo: levantar con un comando
 
-## Quick start
+Desde la raíz del repositorio:
 
-Requisitos: Docker Engine con Docker Compose. Para levantar el cluster:
+```bash
+docker compose up --build
+```
+
+Este único comando:
+
+- construye una imagen .NET 8 compartida;
+- crea la red privada de Docker;
+- levanta `node-a`, `node-b` y `node-c`;
+- configura la identidad y los dos peers de cada nodo;
+- crea un volumen y una base SQLite independiente por nodo;
+- aplica automáticamente las migraciones;
+- inicia heartbeats, procesamiento y health checks.
+
+No requiere crear bases de datos, redes ni configuración manual. Para ejecutarlo
+en segundo plano:
 
 ```bash
 docker compose up --build -d
+docker compose ps
 ```
 
-Ejecuta la demo de failover desde PowerShell:
+Los tres servicios deben aparecer como `healthy`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\demo-failover.ps1
-```
+| Nodo | URL pública |
+|---|---|
+| node-a | http://localhost:5101 |
+| node-b | http://localhost:5102 |
+| node-c | http://localhost:5103 |
 
-O desde Bash:
-
-```bash
-bash ./scripts/demo-failover.sh
-```
-
-Al terminar:
+Para detener y eliminar también los datos de la demo:
 
 ```bash
 docker compose down -v
 ```
 
-El cliente puede enviar `POST /pay` a cualquiera de los puertos públicos
-5101–5103. La demo usa node-a como receptor por simplicidad, pero descubre el
-owner real antes de detenerlo.
+## Bonus: Local Pipeline de un solo comando
 
-## Demo integral de un solo comando
-
-Los scripts integrales parten de un entorno limpio, construyen una única imagen,
-levantan los tres nodos, esperan health, ejecutan el failover y eliminan
-contenedores, red y volúmenes incluso si ocurre un error.
+El pipeline integral construye la imagen, levanta los tres nodos, espera que
+estén saludables, crea un pago, mata abruptamente al owner, verifica el
+failover y limpia el entorno.
 
 PowerShell:
 
@@ -58,29 +63,58 @@ PowerShell:
 powershell -ExecutionPolicy Bypass -File .\scripts\run-poc.ps1
 ```
 
-Bash en Linux o Git Bash:
+Bash:
 
 ```bash
 bash ./scripts/run-poc.sh
 ```
 
-Una ejecución con la imagen en caché tarda aproximadamente 40 segundos; el ciclo
-observado con publish sin caché tardó cerca de 60 segundos. El primer build puede
-tardar más según la red y la caché local. Ambos scripts
-muestran los tiempos reales de build, arranque, failover y total.
+Una ejecución correcta termina con resultados equivalentes a:
 
-Para inspeccionar el resultado del chaos test, conserva los recursos:
+```text
+New term: 2
+New attempt: 2
+Survivor node-x: Completed
+Survivor node-y: Completed
+PaymentCompleted events: 1
+Old owner running: false
+SUCCESS
+```
+
+Para conservar el entorno después de la demostración:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-poc.ps1 -KeepRunning
+.\scripts\run-poc.ps1 -KeepRunning
 ```
 
 ```bash
 bash ./scripts/run-poc.sh --keep-running
 ```
 
-El owner queda detenido y los dos supervivientes continúan activos. Limpia
-manualmente después con `docker compose down -v`.
+Después se debe limpiar manualmente con `docker compose down -v`.
+
+## Simulación de fallo sobre un clúster activo
+
+Si el clúster ya fue iniciado con Docker Compose, el escenario de chaos puede
+ejecutarse por separado:
+
+```powershell
+.\scripts\demo-failover.ps1
+```
+
+```bash
+bash ./scripts/demo-failover.sh
+```
+
+La demo descubre dinámicamente el owner del pago y ejecuta `docker kill` sobre
+ese contenedor durante el procesamiento. Luego confirma que:
+
+- los supervivientes detectan al owner como `Unreachable`;
+- el takeover ocurre después de expirar el lease;
+- el nuevo owner usa un term superior;
+- el pago queda `Completed` en ambos supervivientes;
+- existe una sola completion principal observable;
+- el quórum restante todavía acepta otro pago.
 
 ## Arquitectura
 
@@ -90,10 +124,10 @@ flowchart TB
     Client --> B[node-b :5102]
     Client --> C[node-c :5103]
 
-    subgraph Mesh["gRPC mesh interno :8081"]
-        A <-->|heartbeats, réplica, ownership| B
-        B <-->|heartbeats, réplica, ownership| C
-        C <-->|heartbeats, réplica, ownership| A
+    subgraph Mesh["Mesh gRPC interno :8081"]
+        A <--> B
+        B <--> C
+        C <--> A
     end
 
     A --> DA[(SQLite node-a)]
@@ -101,70 +135,37 @@ flowchart TB
     C --> DC[(SQLite node-c)]
 ```
 
-`SolidarityGrid.Node` es el composition root. Domain conserva invariantes y
-estado; Application define casos de uso y puertos; Infrastructure implementa
-SQLite, gRPC, quorum, leases y workers; Contracts contiene el contrato protobuf.
-Cada nodo usa el mismo binario y su propio almacenamiento.
+Cada nodo ejecuta el mismo código y conserva su propia base SQLite. El puerto
+gRPC `8081` solo está disponible dentro de la red Docker; no se publica en el
+host.
 
-## Flujo normal
+## Estrategia de coordinación
 
-```text
-POST /pay
-→ persistencia local
-→ réplica durable
-→ quorum 2/3
-→ ownership
-→ Processing (8 s)
-→ completion durable en quorum
-→ Completed
-```
+1. El cliente envía `POST /pay` a cualquiera de los tres nodos.
+2. El receptor persiste el pago y obtiene una réplica durable remota: quórum
+   2 de 3.
+3. Un nodo adquiere ownership temporal mediante un lease y un term monotónico.
+4. El procesamiento simulado tarda ocho segundos.
+5. La finalización se replica en quórum antes de confirmarse localmente.
+6. Si el owner muere, los heartbeats lo marcan `Unreachable`.
+7. Después de expirar el lease, un superviviente adquiere ownership con un term
+   superior y completa el pago.
 
-El `Idempotency-Key` es obligatorio. Repetir la misma clave y payload devuelve
-el mismo `PaymentId`; reutilizarla con otro payload retorna conflicto.
+Los terms y el fencing rechazan renovaciones o completions de owners obsoletos.
+La clave `Idempotency-Key` evita crear un segundo pago cuando el cliente repite
+la misma solicitud.
 
-## Flujo de failover
-
-```text
-Processing · term 1 · attempt 1
-→ docker kill del owner descubierto dinámicamente
-→ heartbeat marca Unreachable
-→ lease expirada
-→ takeover con term 2
-→ Processing · attempt 2
-→ Completed
-```
-
-La demo también confirma una única completion principal observable y que los
-supervivientes aceptan un segundo pago con `202 Accepted`.
-
-## Garantías
-
-- Quorum durable 2 de 3 antes de procesar y completar.
-- Ownership exclusivo protegido por leases y fencing con term monotónico.
-- Idempotencia HTTP local y mutaciones gRPC idempotentes.
-- Una transición principal observable a `Completed`.
-- Procesamiento at-least-once durante recovery.
-- SQLite independiente por nodo, sin coordinador central.
-- Correlation ID y logs estructurados por nodo y evento.
-
-## Lo que no garantiza
-
-- Exactly-once absoluto frente a un proveedor de pagos externo.
-- Consenso general ni una implementación de Raft.
-- Reconciliación inmediata del nodo que estuvo caído.
-- Disponibilidad ante cualquier partición de red.
-- Seguridad de producción sin autenticación de workload o mTLS.
-
-## Endpoints
+## API
 
 | Método | Ruta | Propósito |
 |---|---|---|
+| `GET` | `/` | Información básica del nodo |
+| `GET` | `/node` | Identidad y peers configurados |
 | `POST` | `/pay` | Crear o reproducir idempotentemente un pago |
 | `GET` | `/payments/{id}` | Consultar la copia local del pago |
-| `GET` | `/health/live` | Liveness del proceso |
-| `GET` | `/health/ready` | Readiness de configuración y SQLite |
-| `GET` | `/mesh/status` | Estado cacheado del detector de peers |
-| `GET` | `/mesh/peers` | Probe activo a los peers |
+| `GET` | `/health/live` | Liveness |
+| `GET` | `/health/ready` | Readiness |
+| `GET` | `/mesh/status` | Estado conocido de los peers |
 
 Ejemplo:
 
@@ -172,112 +173,62 @@ Ejemplo:
 curl -i http://localhost:5101/pay \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: DEMO-001" \
+  -H "X-Correlation-ID: demo-correlation-001" \
   -d '{"amount":150000,"currency":"COP"}'
 ```
 
-También está disponible [SolidarityGrid.http](SolidarityGrid.http).
+También se incluyen ejemplos en [SolidarityGrid.http](SolidarityGrid.http).
 
-## Puertos
+## Logs
 
-| Nodo | HTTP público | gRPC interno |
-|---|---:|---:|
-| node-a | `localhost:5101` | `node-a:8081` |
-| node-b | `localhost:5102` | `node-b:8081` |
-| node-c | `localhost:5103` | `node-c:8081` |
-
-Docker publica solamente HTTP. El puerto gRPC 8081 se expone dentro de la red de
-Compose, pero no se publica en el host.
-
-## Logs esperados
-
-La historia relevante puede seguirse por `PaymentId`, `NodeId`, `EventName` y
-Correlation ID. Una ejecución de failover produce hitos equivalentes a:
-
-```text
-[node-x] Payment ... replication started; quorum reached.
-[node-x] Ownership acquired; processing started. Term=1; Attempt=1.
-[node-y] Peer node-x is unreachable; abandoned payment detected.
-[node-y] Taking over ... NewTerm=2; recovered processing started. Attempt=2.
-[node-y] Payment ... completed successfully.
-```
-
-Los probes y heartbeats exitosos rutinarios se registran en `Debug`; los cambios
-de estado y eventos de pago quedan en `Information` o `Warning`. Una caída
-esperada de peer no imprime un stack trace por ciclo.
-
-## Configuración temporal
-
-| Parámetro | Valor PoC |
-|---|---:|
-| Procesamiento simulado | 8 s |
-| Lease | 4 s |
-| Renovación de lease | 1 s |
-| Heartbeat | 1 s |
-| Umbral `Suspected` | 3 s |
-| Umbral `Unreachable` | 5 s |
-
-El takeover puede tardar varios segundos: el sistema espera evidencia de caída
-y expiración de lease antes de permitir un owner con term superior.
-
-## Testing
-
-Requiere .NET 8 SDK:
+Los logs JSON permiten seguir la historia por `PaymentId`, `NodeId`,
+`EventName` y `CorrelationId`:
 
 ```bash
-dotnet test ./SolidarityGrid.sln
+docker compose logs --no-color
 ```
 
-Validación rápida del repositorio — tools, restore, format, build, migrations,
-modelo EF, tests y Compose:
+Durante el failover se observan la detección del nodo caído, el takeover, el
+nuevo term y la finalización del pago. Los fallos esperados de un peer no
+generan un stack trace por cada heartbeat.
+
+## Validación técnica
+
+El pipeline local de calidad ejecuta restore, format, build, validación de
+migraciones, pruebas, validación de Compose y Docker build.
+
+PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\local-ci.ps1
+.\scripts\local-ci.ps1
 ```
+
+Bash:
 
 ```bash
 bash ./scripts/local-ci.sh
 ```
 
-`local-ci` también construye la imagen, pero no ejecuta chaos ni levanta
-contenedores. `run-poc` ejecuta el ciclo Docker y el failover completos.
+También se pueden ejecutar solamente las pruebas:
 
-## Decisiones técnicas
+```bash
+dotnet test ./SolidarityGrid.sln
+```
 
-- SQLite privado por nodo evita una base central que actúe como coordinador.
-- gRPC directo permite comunicación tipada sin broker.
-- Quorum 2/3 proporciona una segunda copia durable con un nodo indisponible.
-- Leases limitan ownership temporal; terms monotónicos actúan como fencing.
-- Las mutaciones coordinadas se confirman primero remotamente y luego localmente
-  para no afirmar quorum antes de tener evidencia durable.
-- El recovery repite el efecto simulado, pero la completion es idempotente.
+`local-ci` valida el repositorio sin iniciar el escenario chaos. `run-poc`
+demuestra el ciclo distribuido completo.
 
-## Seguridad de la PoC
+## Garantías y límites
 
-No hay secretos, contraseñas ni certificados en el repositorio. Los contenedores
-se ejecutan como usuario no root. La red interna de Docker se considera trusted
-para esta PoC; producción requeriría autenticación de workload o mTLS, gestión
-de secretos y controles de autorización.
+La PoC proporciona quórum durable 2 de 3, ownership temporal, fencing,
+idempotencia del estado y procesamiento `at-least-once` durante recovery. No
+afirma exactly-once absoluto frente a un proveedor externo, consenso general,
+reconciliación inmediata de un nodo caído ni tolerancia a cualquier partición
+de red.
 
-## Limitaciones
+No hay secretos ni contraseñas en el repositorio y los contenedores se ejecutan
+como usuario no root. Para producción se necesitarían autenticación entre
+nodos, mTLS, gestión de secretos y una integración real con el proveedor de
+pagos.
 
-- El nodo caído no reconcilia inmediatamente una completion ocurrida mientras
-  estuvo fuera.
-- El restart recovery cuando el mismo nodo conserva ownership local requiere una
-  estrategia posterior.
-- Una partición puede parecer una caída; quorum y fencing reducen conflictos,
-  pero no resuelven consenso general.
-- El efecto de pago es un delay controlado, no una integración financiera real.
-- Creaciones simultáneas con la misma clave en nodos diferentes, antes de
-  replicarse, están fuera del escenario principal.
-
-## ADRs
-
-- [ADR 0001 — Distributed mesh foundation](docs/adr/0001-distributed-mesh-foundation.md)
-- [ADR 0002 — Payment lifecycle and idempotency](docs/adr/0002-payment-lifecycle-and-idempotency.md)
-- [ADR 0003 — Node-local SQLite persistence](docs/adr/0003-node-local-sqlite-persistence.md)
-- [ADR 0004 — Idempotent payment HTTP API](docs/adr/0004-idempotent-payment-http-api.md)
-- [ADR 0005 — Direct gRPC mesh transport](docs/adr/0005-direct-grpc-mesh-transport.md)
-- [ADR 0006 — Heartbeat failure detector](docs/adr/0006-heartbeat-failure-detector.md)
-- [ADR 0007 — Durable payment replication](docs/adr/0007-durable-payment-replication.md)
-- [ADR 0008 — Quorum leases and payment processing](docs/adr/0008-quorum-leases-and-payment-processing.md)
-- [ADR 0009 — Automatic payment takeover](docs/adr/0009-automatic-payment-takeover.md)
+Las decisiones de diseño están documentadas en [docs/adr](docs/adr).
