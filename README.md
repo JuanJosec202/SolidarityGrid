@@ -9,6 +9,8 @@ SQLite durable e independiente por nodo. El Slice 3 expone una API pública
 idempotente para crear y consultar pagos locales. El Slice 4 agrega transporte
 mesh directo mediante gRPC. El Slice 5 incorpora el detector periódico de fallos
 y el Slice 6 replica cada pago de forma durable hasta alcanzar quorum 2 de 3.
+El Slice 7 agrega ownership por pago, leases renovables y procesamiento normal
+coordinado mediante ese quorum.
 
 ## Slices completados
 
@@ -23,6 +25,8 @@ y el Slice 6 replica cada pago de forma durable hasta alcanzar quorum 2 de 3.
   canales HTTP/2 reutilizables y diagnóstico de conectividad.
 - Slice 5: heartbeats, estados de salud, recuperación y detección de reinicios.
 - Slice 6: replicación gRPC durable e idempotente con quorum 2 de 3.
+- Slice 7: ownership por pago, lease temporal y procesamiento coordinado de
+  ocho segundos hasta `Completed`.
 
 ## Requisitos
 
@@ -151,6 +155,40 @@ el pago permanece localmente en `Received` y puede reintentarse con la misma
 `Idempotency-Key`. Un replay que alcanza quorum retorna `200 OK`, conserva el
 PaymentId y muestra estado `Replicated`, versión 2.
 
+## Ownership
+
+El ownership se adquiere por pago; no existe un líder global. Un candidato
+primero obtiene una claim durable en al menos un peer y después aplica la misma
+claim localmente, formando quorum 2 de 3.
+
+Cada claim usa un término monotónico y una lease temporal. Para evitar claims
+cruzadas sin una tabla de votos, los candidatos aplican un backoff determinista
+por PaymentId y NodeId antes de competir. El orden cambia por pago y solo separa
+la primera ronda; no asigna ownership ni crea un servicio de liderazgo
+permanente.
+
+## Procesamiento
+
+Cada nodo ejecuta un worker local secuencial. El worker consulta solamente pagos
+`Replicated`, intenta adquirir ownership y, si gana, propaga
+`StartPaymentProcessing` antes de aplicar `StartProcessing` localmente.
+
+El efecto simulado dura exactamente 8000 ms. Durante ese intervalo la lease de
+4000 ms se renueva cada 1000 ms, siempre primero en al menos un peer y luego
+localmente. Si una renovación pierde quorum, el nodo deja de procesar y permite
+que la lease expire.
+
+## Completion
+
+Al terminar el delay, el owner confirma `CompletePayment` durablemente en al
+menos un peer y solo entonces completa su copia local. Los replays con el mismo
+owner y term son idempotentes.
+
+## Garantía
+
+La PoC ofrece procesamiento al menos una vez con una transición idempotente a
+`Completed`. No afirma exactly-once absoluto frente a efectos externos.
+
 ## Idempotency-Key
 
 El header `Idempotency-Key` es obligatorio, opaco y case-sensitive. Repetir la
@@ -235,6 +273,17 @@ recuperación mediante replay:
 
 ```bash
 ./scripts/demo-replication.sh
+```
+
+Para demostrar ownership exclusivo, renovaciones de lease, procesamiento de
+ocho segundos y una única completion:
+
+```powershell
+.\scripts\demo-processing.ps1
+```
+
+```bash
+./scripts/demo-processing.sh
 ```
 
 ## Persistencia local por nodo
@@ -325,18 +374,20 @@ El detector periódico está documentado en
 [ADR 0006: Heartbeat failure detector](docs/adr/0006-heartbeat-failure-detector.md).
 La replicación durable está documentada en
 [ADR 0007: Durable payment replication](docs/adr/0007-durable-payment-replication.md).
+El ownership y procesamiento están documentados en
+[ADR 0008: Quorum leases and payment processing](docs/adr/0008-quorum-leases-and-payment-processing.md).
 
 ## Limitación actual
 
-No existe reconciliación histórica para un nodo que estuvo caído, procesamiento,
-owner coordinado ni takeover. Solicitudes simultáneas con la misma clave en nodos
-distintos antes de replicarse quedan fuera del escenario principal. El quorum de
-replicación confirma durabilidad, pero todavía no es quorum de ownership.
+No existe reconciliación histórica ni takeover automático. Si el owner muere,
+la lease vence, pero otro nodo todavía no reclama automáticamente pagos
+`Claimed` o `Processing`. Solicitudes simultáneas con la misma clave en nodos
+distintos antes de replicarse también quedan fuera del escenario principal.
 
 ## Roadmap
 
-- Ownership, leases coordinadas y procesamiento idempotente.
-- Recuperación, reconciliación y observabilidad distribuida.
+- Recuperación de ownership después de lease vencida.
+- Reconciliación histórica y observabilidad distribuida.
 - Pipeline de demostración y pruebas de caos.
 
 No se asocian fechas a estos slices; cada uno deberá conservar los límites de

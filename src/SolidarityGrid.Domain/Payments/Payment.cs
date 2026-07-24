@@ -252,6 +252,8 @@ public sealed class Payment
     {
         if (Status == PaymentStatus.Completed)
         {
+            EnsureNodeId(ownerNodeId);
+            EnsureOwnerAndTerm(ownerNodeId!, term);
             return false;
         }
 

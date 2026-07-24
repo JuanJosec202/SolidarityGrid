@@ -4,8 +4,10 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using SolidarityGrid.Application.Payments.Replication;
 using SolidarityGrid.Domain.Payments;
+using SolidarityGrid.Infrastructure.Payments;
 
 namespace SolidarityGrid.IntegrationTests;
 
@@ -56,6 +58,11 @@ public class ValidNodeFactory : WebApplicationFactory<Program>
         });
         builder.ConfigureServices(services =>
         {
+            var processingWorker = services.Single(descriptor =>
+                descriptor.ServiceType == typeof(IHostedService) &&
+                descriptor.ImplementationType ==
+                typeof(PaymentProcessingBackgroundService));
+            services.Remove(processingWorker);
             services.RemoveAll<IPaymentReplicaTransport>();
             services.AddSingleton<
                 IPaymentReplicaTransport,

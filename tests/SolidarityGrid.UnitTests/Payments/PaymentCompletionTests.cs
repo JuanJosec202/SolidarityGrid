@@ -106,14 +106,32 @@ public sealed class PaymentCompletionTests
         var completedAt = payment.CompletedAtUtc;
 
         var applied = payment.Complete(
-            PaymentTestData.NodeB,
-            99,
+            PaymentTestData.NodeA,
+            1,
             PaymentTestData.CreatedAt.AddMinutes(5));
 
         Assert.False(applied);
         Assert.Equal(version, payment.Version);
         Assert.Equal(completedAt, payment.CompletedAtUtc);
         Assert.Empty(payment.DequeueDomainEvents());
+    }
+
+    [Fact]
+    public void RepeatedCompletionRejectsDifferentOwnerOrTerm()
+    {
+        var payment = PaymentTestData.CreateProcessing();
+        payment.Complete(
+            PaymentTestData.NodeA,
+            1,
+            PaymentTestData.CreatedAt.AddSeconds(4));
+
+        var exception = Assert.Throws<PaymentDomainException>(() =>
+            payment.Complete(
+                PaymentTestData.NodeB,
+                99,
+                PaymentTestData.CreatedAt.AddMinutes(5)));
+
+        Assert.Equal(PaymentErrorCodes.PaymentOwnerMismatch, exception.Code);
     }
 
     [Fact]

@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using SolidarityGrid.Infrastructure;
 using SolidarityGrid.Infrastructure.Mesh.Configuration;
 using SolidarityGrid.Application;
+using SolidarityGrid.Application.Payments.Coordination;
 using SolidarityGrid.Infrastructure.Persistence.Initialization;
 using SolidarityGrid.Node.Configuration;
 using SolidarityGrid.Node.Diagnostics;
@@ -60,6 +61,8 @@ var nodeOptions = app.Services.GetRequiredService<IOptions<NodeOptions>>().Value
 _ = app.Services.GetRequiredService<IOptions<MeshTransportOptions>>().Value;
 _ = app.Services.GetRequiredService<
     IOptions<MeshFailureDetectorOptions>>().Value;
+_ = app.Services.GetRequiredService<
+    IOptions<PaymentProcessingOptions>>().Value;
 _ = app.Services.GetRequiredService<SolidarityGrid.Application.Mesh.IMeshNodeIdentity>();
 _ = app.Services.GetRequiredService<SolidarityGrid.Application.Mesh.IMeshPeerDirectory>();
 var timeProvider = app.Services.GetRequiredService<TimeProvider>();

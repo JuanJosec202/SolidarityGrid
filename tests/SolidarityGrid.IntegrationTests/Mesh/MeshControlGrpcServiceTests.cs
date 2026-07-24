@@ -5,6 +5,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SolidarityGrid.Application.Mesh;
+using SolidarityGrid.Application.Payments.Coordination;
 using SolidarityGrid.Contracts;
 using SolidarityGrid.Contracts.Mesh.V1;
 using Xunit;
@@ -232,6 +233,164 @@ public sealed class MeshControlGrpcServiceTests
         Assert.Equal(1, await CountPaymentAsync(factory.DatabasePath, request.PaymentId));
     }
 
+    [Fact]
+    public async Task ValidClaimIsDurableAndReplayIsIdempotent()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var client = CreateClient(channel);
+        var replica = ValidReplicaRequest();
+        await client.ReplicatePaymentAsync(replica);
+        var claim = ValidClaimRequest(replica);
+
+        var first = await client.TryClaimPaymentAsync(claim);
+        var replay = await client.TryClaimPaymentAsync(claim);
+
+        Assert.True(first.Granted);
+        Assert.False(first.AlreadyApplied);
+        Assert.Equal("Claimed", first.CurrentStatus);
+        Assert.Equal("peer-one", first.CurrentOwnerNodeId);
+        Assert.Equal(1, first.CurrentTerm);
+        Assert.True(replay.Granted);
+        Assert.True(replay.AlreadyApplied);
+    }
+
+    [Fact]
+    public async Task ActiveLeaseAndStaleTermReturnNeutralRejections()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var client = CreateClient(channel);
+        var replica = ValidReplicaRequest();
+        await client.ReplicatePaymentAsync(replica);
+        var initialClaim = ValidClaimRequest(replica);
+        await client.TryClaimPaymentAsync(initialClaim);
+        var activeLease = ValidClaimRequest(replica, "peer-two", term: 2);
+
+        var activeResult = await client.TryClaimPaymentAsync(activeLease);
+        var stale = ValidClaimRequest(replica, "peer-two", term: 1);
+        stale.OccurredAtUtcTicks = initialClaim.LeaseExpiresAtUtcTicks + 1;
+        stale.LeaseExpiresAtUtcTicks =
+            stale.OccurredAtUtcTicks + TimeSpan.FromMinutes(1).Ticks;
+        var staleResult = await client.TryClaimPaymentAsync(stale);
+
+        Assert.False(activeResult.Granted);
+        Assert.Equal(
+            PaymentCoordinationErrorCodes.ClaimLeaseActive,
+            activeResult.ErrorCode);
+        Assert.False(staleResult.Granted);
+        Assert.Equal(
+            PaymentCoordinationErrorCodes.ClaimTermStale,
+            staleResult.ErrorCode);
+        Assert.Equal(1, staleResult.CurrentTerm);
+    }
+
+    [Fact]
+    public async Task StartRenewAndCompleteArePersistedAndIdempotent()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var client = CreateClient(channel);
+        var replica = ValidReplicaRequest();
+        await client.ReplicatePaymentAsync(replica);
+        var claim = ValidClaimRequest(replica);
+        await client.TryClaimPaymentAsync(claim);
+        var start = ValidStartRequest(replica, claim);
+
+        var started = await client.StartPaymentProcessingAsync(start);
+        var replayedStart = await client.StartPaymentProcessingAsync(start);
+        var renewal = ValidRenewRequest(replica, claim);
+        var renewed = await client.RenewPaymentLeaseAsync(renewal);
+        var completion = ValidCompleteRequest(replica, claim, renewal);
+        var completed = await client.CompletePaymentAsync(completion);
+        var replayedCompletion = await client.CompletePaymentAsync(completion);
+
+        Assert.True(started.Applied);
+        Assert.False(started.AlreadyApplied);
+        Assert.True(replayedStart.AlreadyApplied);
+        Assert.True(renewed.Applied);
+        Assert.True(completed.Applied);
+        Assert.Equal("Completed", completed.CurrentStatus);
+        Assert.True(replayedCompletion.Applied);
+        Assert.True(replayedCompletion.AlreadyApplied);
+    }
+
+    [Fact]
+    public async Task UnknownCoordinationCallerIsPermissionDenied()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var request = ValidClaimRequest(ValidReplicaRequest());
+        request.CallerNodeId = "unknown";
+        request.OwnerNodeId = "unknown";
+
+        var exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await CreateClient(channel).TryClaimPaymentAsync(request));
+
+        Assert.Equal(StatusCode.PermissionDenied, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task CoordinationProtocolMismatchIsFailedPrecondition()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var request = ValidClaimRequest(ValidReplicaRequest());
+        request.ProtocolVersion++;
+
+        var exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await CreateClient(channel).TryClaimPaymentAsync(request));
+
+        Assert.Equal(StatusCode.FailedPrecondition, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task MissingPaymentReturnsFailedClaimWithCurrentTerm()
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+
+        var response = await CreateClient(channel).TryClaimPaymentAsync(
+            ValidClaimRequest(ValidReplicaRequest()));
+
+        Assert.False(response.Granted);
+        Assert.Equal(PaymentCoordinationErrorCodes.Failed, response.ErrorCode);
+        Assert.Equal(0, response.CurrentTerm);
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("term")]
+    public async Task ProcessingMutationRejectsWrongOwnership(string mismatch)
+    {
+        using var factory = new MeshServerFactory();
+        using var channel = CreateChannel(factory);
+        var client = CreateClient(channel);
+        var replica = ValidReplicaRequest();
+        await client.ReplicatePaymentAsync(replica);
+        var claim = ValidClaimRequest(replica);
+        await client.TryClaimPaymentAsync(claim);
+        var start = ValidStartRequest(replica, claim);
+        if (mismatch == "owner")
+        {
+            start.CallerNodeId = "peer-two";
+            start.OwnerNodeId = "peer-two";
+        }
+        else
+        {
+            start.Term = 2;
+        }
+
+        var response = await client.StartPaymentProcessingAsync(start);
+
+        Assert.False(response.Applied);
+        Assert.Equal(
+            mismatch == "owner"
+                ? PaymentCoordinationErrorCodes.OwnerMismatch
+                : PaymentCoordinationErrorCodes.TermMismatch,
+            response.ErrorCode);
+    }
+
     private static GrpcChannel CreateChannel(ValidNodeFactory factory) =>
         GrpcChannel.ForAddress(
             "http://localhost",
@@ -275,6 +434,68 @@ public sealed class MeshControlGrpcServiceTests
             ReplicatedAtUtcTicks = createdAt.AddSeconds(1).UtcTicks,
         };
     }
+
+    private static TryClaimPaymentRequest ValidClaimRequest(
+        ReplicatePaymentRequest replica,
+        string owner = "peer-one",
+        long term = 1) =>
+        new()
+        {
+            CallerNodeId = owner,
+            CallerInstanceId = Guid.NewGuid().ToString("D"),
+            ProtocolVersion = MeshProtocol.CurrentVersion,
+            PaymentId = replica.PaymentId,
+            OwnerNodeId = owner,
+            Term = term,
+            OccurredAtUtcTicks = replica.ReplicatedAtUtcTicks + 1,
+            LeaseExpiresAtUtcTicks =
+                replica.ReplicatedAtUtcTicks + TimeSpan.FromMinutes(5).Ticks,
+        };
+
+    private static StartPaymentProcessingRequest ValidStartRequest(
+        ReplicatePaymentRequest replica,
+        TryClaimPaymentRequest claim) =>
+        new()
+        {
+            CallerNodeId = claim.CallerNodeId,
+            CallerInstanceId = claim.CallerInstanceId,
+            ProtocolVersion = MeshProtocol.CurrentVersion,
+            PaymentId = replica.PaymentId,
+            OwnerNodeId = claim.OwnerNodeId,
+            Term = claim.Term,
+            OccurredAtUtcTicks = claim.OccurredAtUtcTicks + 1,
+        };
+
+    private static RenewPaymentLeaseRequest ValidRenewRequest(
+        ReplicatePaymentRequest replica,
+        TryClaimPaymentRequest claim) =>
+        new()
+        {
+            CallerNodeId = claim.CallerNodeId,
+            CallerInstanceId = claim.CallerInstanceId,
+            ProtocolVersion = MeshProtocol.CurrentVersion,
+            PaymentId = replica.PaymentId,
+            OwnerNodeId = claim.OwnerNodeId,
+            Term = claim.Term,
+            OccurredAtUtcTicks = claim.OccurredAtUtcTicks + 2,
+            NewLeaseExpiresAtUtcTicks =
+                claim.LeaseExpiresAtUtcTicks + TimeSpan.FromMinutes(1).Ticks,
+        };
+
+    private static CompletePaymentRequest ValidCompleteRequest(
+        ReplicatePaymentRequest replica,
+        TryClaimPaymentRequest claim,
+        RenewPaymentLeaseRequest renewal) =>
+        new()
+        {
+            CallerNodeId = claim.CallerNodeId,
+            CallerInstanceId = claim.CallerInstanceId,
+            ProtocolVersion = MeshProtocol.CurrentVersion,
+            PaymentId = replica.PaymentId,
+            OwnerNodeId = claim.OwnerNodeId,
+            Term = claim.Term,
+            OccurredAtUtcTicks = renewal.OccurredAtUtcTicks + 1,
+        };
 
     private static async Task<long> CountPaymentAsync(
         string databasePath,

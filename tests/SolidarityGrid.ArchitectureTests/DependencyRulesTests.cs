@@ -291,7 +291,7 @@ public sealed class DependencyRulesTests
     }
 
     [Fact]
-    public void MeshProtoDefinesOnlyProbeAndReplicatePaymentRpcs()
+    public void MeshProtoDefinesOnlyApprovedPaymentCoordinationRpcs()
     {
         var protoPath = Path.Combine(
             FindRepositoryRoot(),
@@ -305,11 +305,20 @@ public sealed class DependencyRulesTests
             .Where(line => line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal))
             .ToArray();
 
-        Assert.Equal(2, rpcLines.Length);
-        Assert.Contains(rpcLines, line =>
-            line.Contains("rpc Probe(", StringComparison.Ordinal));
-        Assert.Contains(rpcLines, line =>
-            line.Contains("rpc ReplicatePayment(", StringComparison.Ordinal));
+        string[] expectedRpcNames =
+        [
+            "Probe",
+            "ReplicatePayment",
+            "TryClaimPayment",
+            "StartPaymentProcessing",
+            "RenewPaymentLease",
+            "CompletePayment",
+        ];
+
+        Assert.Equal(expectedRpcNames.Length, rpcLines.Length);
+        Assert.All(expectedRpcNames, rpcName =>
+            Assert.Contains(rpcLines, line =>
+                line.Contains($"rpc {rpcName}(", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -501,14 +510,14 @@ public sealed class DependencyRulesTests
         Assert.DoesNotContain("rpc Gossip", proto, StringComparison.Ordinal);
         Assert.DoesNotContain("rpc Vote", proto, StringComparison.Ordinal);
         Assert.Equal(
-            2,
+            6,
             proto.Split('\n').Count(
                 line => line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal)));
         Assert.DoesNotContain("Takeover", nonDomainSource, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void PaymentReplicationAddsNoSchemaOrWorker()
+    public void PaymentProcessingAddsNoSchemaOrForbiddenCoordinator()
     {
         var root = FindRepositoryRoot();
         var migrations = Directory.GetFiles(
@@ -528,9 +537,66 @@ public sealed class DependencyRulesTests
 
         Assert.Equal(3, migrations.Length);
         Assert.DoesNotContain("ConsensusEngine", nonDomainSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("ProcessingWorker", nonDomainSource, StringComparison.Ordinal);
         Assert.DoesNotContain("TakeoverWorker", nonDomainSource, StringComparison.Ordinal);
         Assert.DoesNotContain("BuildServiceProvider", nonDomainSource, StringComparison.Ordinal);
+        Assert.Contains(
+            "PaymentProcessingBackgroundService",
+            nonDomainSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "GrpcPaymentCoordinationTransport",
+            nonDomainSource,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PaymentProcessingRespectsLayerAndScopeBoundaries()
+    {
+        var root = FindRepositoryRoot();
+        var application = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Application"));
+        var infrastructure = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Infrastructure"));
+        var node = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Node"));
+        var migration = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Infrastructure",
+            "Persistence",
+            "Migrations",
+            "20260723205054_InitialNodePaymentStorage.cs"));
+
+        Assert.DoesNotContain("Grpc.", application, StringComparison.Ordinal);
+        Assert.DoesNotContain("IServiceProvider", application, StringComparison.Ordinal);
+        Assert.Contains(
+            "GrpcPaymentCoordinationTransport",
+            infrastructure,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PaymentProcessingBackgroundService",
+            infrastructure,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "MeshControlGrpcService",
+            node,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            migration.Split("CreateTable(", StringSplitOptions.None).Length - 1);
+        Assert.Equal(
+            5,
+            migration.Split("CreateIndex(", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("GlobalLeader", application, StringComparison.Ordinal);
+        Assert.DoesNotContain("VoteRepository", infrastructure, StringComparison.Ordinal);
+        Assert.DoesNotContain("HistoricalReconciliation", infrastructure, StringComparison.Ordinal);
+        Assert.DoesNotContain("BuildServiceProvider", infrastructure, StringComparison.Ordinal);
     }
 
     [Fact]

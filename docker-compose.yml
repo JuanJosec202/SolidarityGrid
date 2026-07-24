@@ -36,6 +36,11 @@ services:
       MeshFailureDetector__HeartbeatIntervalMilliseconds: 1000
       MeshFailureDetector__SuspectAfterMilliseconds: 3000
       MeshFailureDetector__UnreachableAfterMilliseconds: 5000
+      PaymentProcessing__ProcessingDurationMilliseconds: 8000
+      PaymentProcessing__LeaseDurationMilliseconds: 4000
+      PaymentProcessing__LeaseRenewalIntervalMilliseconds: 1000
+      PaymentProcessing__ScanIntervalMilliseconds: 500
+      PaymentProcessing__BatchSize: 10
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:
@@ -59,6 +64,11 @@ services:
       MeshFailureDetector__HeartbeatIntervalMilliseconds: 1000
       MeshFailureDetector__SuspectAfterMilliseconds: 3000
       MeshFailureDetector__UnreachableAfterMilliseconds: 5000
+      PaymentProcessing__ProcessingDurationMilliseconds: 8000
+      PaymentProcessing__LeaseDurationMilliseconds: 4000
+      PaymentProcessing__LeaseRenewalIntervalMilliseconds: 1000
+      PaymentProcessing__ScanIntervalMilliseconds: 500
+      PaymentProcessing__BatchSize: 10
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:
@@ -82,6 +92,11 @@ services:
       MeshFailureDetector__HeartbeatIntervalMilliseconds: 1000
       MeshFailureDetector__SuspectAfterMilliseconds: 3000
       MeshFailureDetector__UnreachableAfterMilliseconds: 5000
+      PaymentProcessing__ProcessingDurationMilliseconds: 8000
+      PaymentProcessing__LeaseDurationMilliseconds: 4000
+      PaymentProcessing__LeaseRenewalIntervalMilliseconds: 1000
+      PaymentProcessing__ScanIntervalMilliseconds: 500
+      PaymentProcessing__BatchSize: 10
       Persistence__DatabasePath: /data/solidarity-grid.db
       Persistence__BusyTimeoutMilliseconds: 5000
     volumes:

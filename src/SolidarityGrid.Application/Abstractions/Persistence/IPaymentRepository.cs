@@ -12,6 +12,10 @@ public interface IPaymentRepository
         IdempotencyKey idempotencyKey,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyCollection<Payment>> GetReplicatedPaymentsAsync(
+        int limit,
+        CancellationToken cancellationToken);
+
     ValueTask AddAsync(
         Payment payment,
         CancellationToken cancellationToken);

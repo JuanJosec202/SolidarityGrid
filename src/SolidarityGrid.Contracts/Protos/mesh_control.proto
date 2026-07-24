@@ -8,6 +8,14 @@ service MeshControl {
   rpc Probe(ProbeRequest) returns (ProbeResponse);
   rpc ReplicatePayment(ReplicatePaymentRequest)
       returns (ReplicatePaymentResponse);
+  rpc TryClaimPayment(TryClaimPaymentRequest)
+      returns (TryClaimPaymentResponse);
+  rpc StartPaymentProcessing(StartPaymentProcessingRequest)
+      returns (PaymentCoordinationResponse);
+  rpc RenewPaymentLease(RenewPaymentLeaseRequest)
+      returns (PaymentCoordinationResponse);
+  rpc CompletePayment(CompletePaymentRequest)
+      returns (PaymentCoordinationResponse);
 }
 
 message ProbeRequest {
@@ -44,4 +52,72 @@ message ReplicatePaymentResponse {
   bool already_existed = 5;
   string status = 6;
   int64 version = 7;
+}
+
+message TryClaimPaymentRequest {
+  string caller_node_id = 1;
+  string caller_instance_id = 2;
+  int32 protocol_version = 3;
+  string payment_id = 4;
+  string owner_node_id = 5;
+  int64 term = 6;
+  int64 occurred_at_utc_ticks = 7;
+  int64 lease_expires_at_utc_ticks = 8;
+}
+
+message TryClaimPaymentResponse {
+  string responder_node_id = 1;
+  string responder_instance_id = 2;
+  string payment_id = 3;
+  bool granted = 4;
+  bool already_applied = 5;
+  string current_status = 6;
+  string current_owner_node_id = 7;
+  int64 current_term = 8;
+  int64 lease_expires_at_utc_ticks = 9;
+  string error_code = 10;
+}
+
+message StartPaymentProcessingRequest {
+  string caller_node_id = 1;
+  string caller_instance_id = 2;
+  int32 protocol_version = 3;
+  string payment_id = 4;
+  string owner_node_id = 5;
+  int64 term = 6;
+  int64 occurred_at_utc_ticks = 7;
+}
+
+message RenewPaymentLeaseRequest {
+  string caller_node_id = 1;
+  string caller_instance_id = 2;
+  int32 protocol_version = 3;
+  string payment_id = 4;
+  string owner_node_id = 5;
+  int64 term = 6;
+  int64 occurred_at_utc_ticks = 7;
+  int64 new_lease_expires_at_utc_ticks = 8;
+}
+
+message CompletePaymentRequest {
+  string caller_node_id = 1;
+  string caller_instance_id = 2;
+  int32 protocol_version = 3;
+  string payment_id = 4;
+  string owner_node_id = 5;
+  int64 term = 6;
+  int64 occurred_at_utc_ticks = 7;
+}
+
+message PaymentCoordinationResponse {
+  string responder_node_id = 1;
+  string responder_instance_id = 2;
+  string payment_id = 3;
+  bool applied = 4;
+  bool already_applied = 5;
+  string current_status = 6;
+  string current_owner_node_id = 7;
+  int64 current_term = 8;
+  int64 lease_expires_at_utc_ticks = 9;
+  string error_code = 10;
 }

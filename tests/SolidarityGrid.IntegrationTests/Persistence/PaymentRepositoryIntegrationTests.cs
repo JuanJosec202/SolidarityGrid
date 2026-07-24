@@ -190,6 +190,42 @@ public sealed class PaymentRepositoryIntegrationTests
                 cancellation.Token));
     }
 
+    [Fact]
+    public async Task ReplicatedQueryFiltersOrdersLimitsAndTracksPayments()
+    {
+        await using var database = new SqliteTestDatabase();
+        await database.InitializeAsync();
+        var later = PaymentPersistenceTestData.Create(
+            "REPLICATED-LATER",
+            createdAt: PaymentPersistenceTestData.CreatedAt.AddMinutes(2));
+        later.MarkReplicated(PaymentPersistenceTestData.CreatedAt.AddMinutes(3));
+        var earlier = PaymentPersistenceTestData.Create(
+            "REPLICATED-EARLIER",
+            createdAt: PaymentPersistenceTestData.CreatedAt.AddMinutes(1));
+        earlier.MarkReplicated(PaymentPersistenceTestData.CreatedAt.AddMinutes(3));
+        var received = PaymentPersistenceTestData.Create("RECEIVED");
+        var processing = PaymentPersistenceTestData.CreateProcessing();
+        var completed = PaymentPersistenceTestData.CreateProcessing("COMPLETED");
+        completed.Complete(
+            new NodeId("node-a"),
+            1,
+            PaymentPersistenceTestData.CreatedAt.AddSeconds(4));
+
+        await using var context = database.CreateContext();
+        context.AddRange(later, earlier, received, processing, completed);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+        var repository = new PaymentRepository(context);
+
+        var result = await repository.GetReplicatedPaymentsAsync(
+            1,
+            CancellationToken.None);
+
+        var payment = Assert.Single(result);
+        Assert.Equal(earlier.Id, payment.Id);
+        Assert.Equal(EntityState.Unchanged, context.Entry(payment).State);
+    }
+
     private static async Task<string[]> ReadNamesAsync(
         SolidarityGridDbContext context,
         string commandText)

@@ -1,6 +1,7 @@
 using Grpc.Core;
 using System.Globalization;
 using SolidarityGrid.Application.Mesh;
+using SolidarityGrid.Application.Payments.Coordination;
 using SolidarityGrid.Application.Payments.Replication;
 using SolidarityGrid.Contracts;
 using SolidarityGrid.Contracts.Mesh.V1;
@@ -14,6 +15,10 @@ public sealed class MeshControlGrpcService(
     IMeshPeerDirectory peerDirectory,
     TimeProvider timeProvider,
     ReceivePaymentReplicaUseCase receivePaymentReplica,
+    ReceivePaymentClaimUseCase receivePaymentClaim,
+    ReceivePaymentProcessingStartedUseCase receiveProcessingStarted,
+    ReceivePaymentLeaseRenewalUseCase receiveLeaseRenewal,
+    ReceivePaymentCompletionUseCase receiveCompletion,
     ILogger<MeshControlGrpcService> logger) : MeshControl.MeshControlBase
 {
     public override Task<ProbeResponse> Probe(
@@ -189,6 +194,118 @@ public sealed class MeshControlGrpcService(
         };
     }
 
+    public override async Task<TryClaimPaymentResponse> TryClaimPayment(
+        TryClaimPaymentRequest request,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        context.CancellationToken.ThrowIfCancellationRequested();
+        var values = ParseCoordinationValues(
+            request.CallerNodeId,
+            request.CallerInstanceId,
+            request.ProtocolVersion,
+            request.PaymentId,
+            request.OwnerNodeId,
+            request.Term,
+            request.OccurredAtUtcTicks);
+        if (!TryCreateUtc(
+                request.LeaseExpiresAtUtcTicks,
+                out var leaseExpiresAtUtc) ||
+            leaseExpiresAtUtc <= values.OccurredAtUtc)
+        {
+            throw InvalidArgument("The claim lease expiration is invalid.");
+        }
+
+        var result = await receivePaymentClaim.ExecuteAsync(
+            new PaymentClaimRequest(
+                values.PaymentId,
+                values.OwnerNodeId,
+                values.Term,
+                leaseExpiresAtUtc,
+                values.OccurredAtUtc),
+            context.CancellationToken);
+
+        return new TryClaimPaymentResponse
+        {
+            ResponderNodeId = localIdentity.NodeId.Value,
+            ResponderInstanceId = localIdentity.InstanceId.ToString("D"),
+            PaymentId = values.PaymentId.ToString("D"),
+            Granted = result.Granted,
+            AlreadyApplied = result.AlreadyApplied,
+            CurrentStatus = result.CurrentStatus?.ToString() ?? string.Empty,
+            CurrentOwnerNodeId =
+                result.CurrentOwnerNodeId?.Value ?? string.Empty,
+            CurrentTerm = result.CurrentTerm,
+            LeaseExpiresAtUtcTicks =
+                result.LeaseExpiresAtUtc?.UtcTicks ?? 0,
+            ErrorCode = result.ErrorCode ?? string.Empty,
+        };
+    }
+
+    public override async Task<PaymentCoordinationResponse> StartPaymentProcessing(
+        StartPaymentProcessingRequest request,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var values = ParseCoordinationValues(
+            request.CallerNodeId,
+            request.CallerInstanceId,
+            request.ProtocolVersion,
+            request.PaymentId,
+            request.OwnerNodeId,
+            request.Term,
+            request.OccurredAtUtcTicks);
+        var result = await receiveProcessingStarted.ExecuteAsync(
+            values.ToCommand(),
+            context.CancellationToken);
+        return CreateCoordinationResponse(values.PaymentId, result);
+    }
+
+    public override async Task<PaymentCoordinationResponse> RenewPaymentLease(
+        RenewPaymentLeaseRequest request,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var values = ParseCoordinationValues(
+            request.CallerNodeId,
+            request.CallerInstanceId,
+            request.ProtocolVersion,
+            request.PaymentId,
+            request.OwnerNodeId,
+            request.Term,
+            request.OccurredAtUtcTicks);
+        if (!TryCreateUtc(
+                request.NewLeaseExpiresAtUtcTicks,
+                out var leaseExpiresAtUtc))
+        {
+            throw InvalidArgument("The new lease expiration is invalid.");
+        }
+
+        var result = await receiveLeaseRenewal.ExecuteAsync(
+            values.ToCommand(leaseExpiresAtUtc),
+            context.CancellationToken);
+        return CreateCoordinationResponse(values.PaymentId, result);
+    }
+
+    public override async Task<PaymentCoordinationResponse> CompletePayment(
+        CompletePaymentRequest request,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var values = ParseCoordinationValues(
+            request.CallerNodeId,
+            request.CallerInstanceId,
+            request.ProtocolVersion,
+            request.PaymentId,
+            request.OwnerNodeId,
+            request.Term,
+            request.OccurredAtUtcTicks);
+        var result = await receiveCompletion.ExecuteAsync(
+            values.ToCommand(),
+            context.CancellationToken);
+        return CreateCoordinationResponse(values.PaymentId, result);
+    }
+
     private NodeId ParseCallerNodeId(string value)
     {
         try
@@ -282,6 +399,99 @@ public sealed class MeshControlGrpcService(
         }
     }
 
+    private CoordinationValues ParseCoordinationValues(
+        string callerNodeIdValue,
+        string callerInstanceId,
+        int protocolVersion,
+        string paymentIdValue,
+        string ownerNodeIdValue,
+        long term,
+        long occurredAtUtcTicks)
+    {
+        NodeId callerNodeId;
+        NodeId ownerNodeId;
+        try
+        {
+            callerNodeId = new NodeId(callerNodeIdValue);
+            ownerNodeId = new NodeId(ownerNodeIdValue);
+        }
+        catch (PaymentDomainException)
+        {
+            throw InvalidArgument("The coordination node identity is invalid.");
+        }
+
+        if (callerNodeId == localIdentity.NodeId)
+        {
+            throw InvalidArgument("The caller cannot be the local node.");
+        }
+
+        if (!peerDirectory.Contains(callerNodeId))
+        {
+            throw new RpcException(new Status(
+                StatusCode.PermissionDenied,
+                "The caller is not a configured peer."));
+        }
+
+        if (callerNodeId != ownerNodeId)
+        {
+            throw InvalidArgument("The caller must be the proposed owner.");
+        }
+
+        if (!Guid.TryParse(callerInstanceId, out var instanceId) ||
+            instanceId == Guid.Empty)
+        {
+            throw InvalidArgument("The caller InstanceId is invalid.");
+        }
+
+        if (protocolVersion != MeshProtocol.CurrentVersion)
+        {
+            throw new RpcException(new Status(
+                StatusCode.FailedPrecondition,
+                "The mesh protocol version is incompatible."));
+        }
+
+        if (!Guid.TryParse(paymentIdValue, out var paymentId) ||
+            paymentId == Guid.Empty)
+        {
+            throw InvalidArgument("The payment ID is invalid.");
+        }
+
+        if (term <= 0)
+        {
+            throw InvalidArgument("The coordination term must be positive.");
+        }
+
+        if (!TryCreateUtc(occurredAtUtcTicks, out var occurredAtUtc))
+        {
+            throw InvalidArgument("The occurrence timestamp is invalid.");
+        }
+
+        return new CoordinationValues(
+            paymentId,
+            ownerNodeId,
+            term,
+            occurredAtUtc);
+    }
+
+    private PaymentCoordinationResponse CreateCoordinationResponse(
+        Guid paymentId,
+        ReceivePaymentCoordinationResult result) =>
+        new()
+        {
+            ResponderNodeId = localIdentity.NodeId.Value,
+            ResponderInstanceId = localIdentity.InstanceId.ToString("D"),
+            PaymentId = paymentId.ToString("D"),
+            Applied = result.Applied,
+            AlreadyApplied = result.AlreadyApplied,
+            CurrentStatus = result.CurrentStatus?.ToString() ?? string.Empty,
+            CurrentOwnerNodeId =
+                result.CurrentOwnerNodeId?.Value ?? string.Empty,
+            CurrentTerm = result.CurrentTerm,
+            LeaseExpiresAtUtcTicks =
+                result.LeaseExpiresAtUtc?.UtcTicks ?? 0,
+            ErrorCode = result.ErrorCode ?? string.Empty,
+        };
+
     private void Reject(
         string peerNodeId,
         string reason,
@@ -332,6 +542,9 @@ public sealed class MeshControlGrpcService(
         return true;
     }
 
+    private static RpcException InvalidArgument(string message) =>
+        new(new Status(StatusCode.InvalidArgument, message));
+
     private static string GetCorrelationId(ServerCallContext context)
     {
         var supplied = context.RequestHeaders
@@ -357,5 +570,21 @@ public sealed class MeshControlGrpcService(
         }
 
         return httpContext.TraceIdentifier;
+    }
+
+    private sealed record CoordinationValues(
+        Guid PaymentId,
+        NodeId OwnerNodeId,
+        long Term,
+        DateTimeOffset OccurredAtUtc)
+    {
+        public PaymentCoordinationCommand ToCommand(
+            DateTimeOffset? leaseExpiresAtUtc = null) =>
+            new(
+                PaymentId,
+                OwnerNodeId,
+                Term,
+                OccurredAtUtc,
+                leaseExpiresAtUtc);
     }
 }

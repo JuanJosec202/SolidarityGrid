@@ -25,6 +25,19 @@ public sealed class PaymentRepository(SolidarityGridDbContext dbContext)
             cancellationToken);
     }
 
+    public async Task<IReadOnlyCollection<Payment>> GetReplicatedPaymentsAsync(
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return await dbContext.Payments
+            .Where(payment => payment.Status == PaymentStatus.Replicated)
+            .OrderBy(payment => payment.CreatedAtUtc)
+            .Take(limit)
+            .ToArrayAsync(cancellationToken);
+    }
+
     public async ValueTask AddAsync(
         Payment payment,
         CancellationToken cancellationToken)

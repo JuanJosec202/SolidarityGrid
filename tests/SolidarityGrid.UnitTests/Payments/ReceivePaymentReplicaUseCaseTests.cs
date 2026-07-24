@@ -169,6 +169,11 @@ public sealed class ReceivePaymentReplicaUseCaseTests
                 existing?.IdempotencyKey == idempotencyKey ? existing : null);
         }
 
+        public Task<IReadOnlyCollection<Payment>> GetReplicatedPaymentsAsync(
+            int limit,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public ValueTask AddAsync(
             Payment payment,
             CancellationToken cancellationToken)

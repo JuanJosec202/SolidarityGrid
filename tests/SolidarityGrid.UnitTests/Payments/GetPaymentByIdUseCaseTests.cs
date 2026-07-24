@@ -88,6 +88,11 @@ public sealed class GetPaymentByIdUseCaseTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyCollection<Payment>> GetReplicatedPaymentsAsync(
+            int limit,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public ValueTask AddAsync(
             Payment paymentToAdd,
             CancellationToken cancellationToken) =>

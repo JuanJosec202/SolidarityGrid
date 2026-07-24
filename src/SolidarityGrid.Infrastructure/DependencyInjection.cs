@@ -7,6 +7,7 @@ using SolidarityGrid.Application.Abstractions.Persistence;
 using SolidarityGrid.Application.Abstractions;
 using SolidarityGrid.Application.Mesh;
 using SolidarityGrid.Application.Mesh.Health;
+using SolidarityGrid.Application.Payments.Coordination;
 using SolidarityGrid.Application.Payments.Replication;
 using SolidarityGrid.Infrastructure.Identifiers;
 using SolidarityGrid.Infrastructure.Mesh;
@@ -15,6 +16,8 @@ using SolidarityGrid.Infrastructure.Persistence;
 using SolidarityGrid.Infrastructure.Persistence.Configuration;
 using SolidarityGrid.Infrastructure.Persistence.Health;
 using SolidarityGrid.Infrastructure.Persistence.Initialization;
+using SolidarityGrid.Infrastructure.Payments;
+using SolidarityGrid.Infrastructure.Payments.Configuration;
 
 namespace SolidarityGrid.Infrastructure;
 
@@ -61,6 +64,18 @@ public static class DependencyInjection
         services.AddSingleton<
             IValidateOptions<MeshFailureDetectorOptions>,
             MeshFailureDetectorOptionsValidator>();
+        services
+            .AddOptions<PaymentProcessingOptions>()
+            .Bind(configuration.GetRequiredSection(
+                PaymentProcessingOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<
+            IValidateOptions<PaymentProcessingOptions>,
+            PaymentProcessingOptionsValidator>();
+        services.AddSingleton(serviceProvider =>
+            serviceProvider
+                .GetRequiredService<IOptions<PaymentProcessingOptions>>()
+                .Value);
         services.AddSingleton<GrpcMeshChannelPool>();
         services.AddSingleton<IMeshPeerProbe, GrpcMeshPeerProbe>();
         services.AddSingleton<
@@ -69,6 +84,12 @@ public static class DependencyInjection
         services.AddSingleton<
             IPaymentReplicationObserver,
             PaymentReplicationObserver>();
+        services.AddSingleton<
+            IPaymentCoordinationTransport,
+            GrpcPaymentCoordinationTransport>();
+        services.AddSingleton<
+            IPaymentCoordinationObserver,
+            PaymentCoordinationObserver>();
         services.AddSingleton<IMeshPeerHealthRegistry>(serviceProvider =>
         {
             var detector = serviceProvider
@@ -101,6 +122,8 @@ public static class DependencyInjection
 
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddScoped<IUnitOfWork, SolidarityGridUnitOfWork>();
+        services.AddScoped<PaymentProcessingCycle>();
+        services.AddHostedService<PaymentProcessingBackgroundService>();
         services.AddSingleton<DatabaseInitializationState>();
         services.AddScoped<IDatabaseInitializer, SqliteDatabaseInitializer>();
         services
