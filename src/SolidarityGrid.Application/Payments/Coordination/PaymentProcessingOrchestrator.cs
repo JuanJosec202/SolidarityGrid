@@ -32,10 +32,16 @@ public sealed class PaymentProcessingOrchestrator(
                 return PaymentProcessingResult.From(
                     ownership.Status == PaymentOwnershipStatus.QuorumUnavailable
                         ? PaymentProcessingStatus.QuorumUnavailable
-                        : PaymentProcessingStatus.NotAcquired);
+                        : PaymentProcessingStatus.NotAcquired,
+                    mode: ownership.IsTakeover
+                        ? PaymentProcessingMode.TakeoverProcessing
+                        : null);
             }
 
             var term = ownership.Term!.Value;
+            var mode = ownership.IsTakeover
+                ? PaymentProcessingMode.TakeoverProcessing
+                : PaymentProcessingMode.InitialProcessing;
             var startResult = await StartProcessingAsync(
                 payment,
                 term,
@@ -46,7 +52,20 @@ public sealed class PaymentProcessingOrchestrator(
                 Abort(payment, correlationId, term);
                 return PaymentProcessingResult.From(
                     PaymentProcessingStatus.QuorumUnavailable,
-                    term);
+                    term,
+                    mode: mode);
+            }
+
+            if (ownership.IsTakeover)
+            {
+                observer.RecoveredPaymentProcessingStarted(
+                    payment.Id,
+                    correlationId,
+                    ownership.PreviousOwnerNodeId!,
+                    ownership.NewOwnerNodeId!,
+                    ownership.PreviousTerm,
+                    term,
+                    payment.Attempt);
             }
 
             var renewalResult = await DelayWithRenewalsAsync(
@@ -61,7 +80,8 @@ public sealed class PaymentProcessingOrchestrator(
                     PaymentProcessingStatus.LeaseRenewalFailed,
                     term,
                     renewalResult.SuccessfulPeers,
-                    renewalResult.Renewals);
+                    renewalResult.Renewals,
+                    mode);
             }
 
             var completed = await CompleteAsync(
@@ -76,14 +96,28 @@ public sealed class PaymentProcessingOrchestrator(
                     PaymentProcessingStatus.CompletionQuorumUnavailable,
                     term,
                     completed.SuccessfulPeers,
-                    renewalResult.Renewals);
+                    renewalResult.Renewals,
+                    mode);
+            }
+
+            if (ownership.IsTakeover)
+            {
+                observer.RecoveredPaymentCompleted(
+                    payment.Id,
+                    correlationId,
+                    ownership.PreviousOwnerNodeId!,
+                    ownership.NewOwnerNodeId!,
+                    ownership.PreviousTerm,
+                    term,
+                    payment.Attempt);
             }
 
             return PaymentProcessingResult.From(
                 PaymentProcessingStatus.AcquiredAndCompleted,
                 term,
                 completed.SuccessfulPeers,
-                renewalResult.Renewals);
+                renewalResult.Renewals,
+                mode);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

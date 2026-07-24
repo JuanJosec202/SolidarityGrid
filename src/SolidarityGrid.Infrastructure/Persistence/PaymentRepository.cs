@@ -38,6 +38,25 @@ public sealed class PaymentRepository(SolidarityGridDbContext dbContext)
             .ToArrayAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyCollection<Payment>> GetRecoverablePaymentsAsync(
+        DateTimeOffset utcNow,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        var normalizedUtcNow = utcNow.ToUniversalTime();
+
+        return await dbContext.Payments
+            .Where(payment =>
+                (payment.Status == PaymentStatus.Claimed ||
+                 payment.Status == PaymentStatus.Processing) &&
+                payment.LeaseExpiresAtUtc != null &&
+                payment.LeaseExpiresAtUtc <= normalizedUtcNow)
+            .OrderBy(payment => payment.LeaseExpiresAtUtc)
+            .Take(limit)
+            .ToArrayAsync(cancellationToken);
+    }
+
     public async ValueTask AddAsync(
         Payment payment,
         CancellationToken cancellationToken)

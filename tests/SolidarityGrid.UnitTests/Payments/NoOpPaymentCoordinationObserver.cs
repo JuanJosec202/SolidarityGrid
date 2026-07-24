@@ -27,6 +27,38 @@ internal sealed class NoOpPaymentCoordinationObserver :
     {
     }
 
+    public void TakeoverStarted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long newTerm,
+        DateTimeOffset previousLeaseExpiresAtUtc)
+    {
+    }
+
+    public void TakeoverAcquired(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long newTerm)
+    {
+    }
+
+    public void TakeoverRejected(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long proposedTerm,
+        string errorCode)
+    {
+    }
+
     public void ProcessingStarted(
         Guid paymentId,
         string correlationId,
@@ -69,6 +101,28 @@ internal sealed class NoOpPaymentCoordinationObserver :
         string correlationId,
         string ownerNodeId,
         long term,
+        int attempt)
+    {
+    }
+
+    public void RecoveredPaymentProcessingStarted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        string newOwnerNodeId,
+        long previousTerm,
+        long newTerm,
+        int attempt)
+    {
+    }
+
+    public void RecoveredPaymentCompleted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        string newOwnerNodeId,
+        long previousTerm,
+        long newTerm,
         int attempt)
     {
     }

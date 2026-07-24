@@ -93,6 +93,12 @@ public sealed class GetPaymentByIdUseCaseTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyCollection<Payment>> GetRecoverablePaymentsAsync(
+            DateTimeOffset utcNow,
+            int limit,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public ValueTask AddAsync(
             Payment paymentToAdd,
             CancellationToken cancellationToken) =>

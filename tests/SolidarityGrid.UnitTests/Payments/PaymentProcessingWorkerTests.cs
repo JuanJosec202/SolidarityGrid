@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using SolidarityGrid.Application.Abstractions;
 using SolidarityGrid.Application.Abstractions.Persistence;
+using SolidarityGrid.Application.Mesh;
+using SolidarityGrid.Application.Mesh.Health;
 using SolidarityGrid.Application.Payments.Coordination;
 using SolidarityGrid.Domain.Payments;
 using SolidarityGrid.Infrastructure.Payments;
@@ -10,6 +12,9 @@ namespace SolidarityGrid.UnitTests.Payments;
 
 public sealed class PaymentProcessingWorkerTests
 {
+    private static readonly DateTimeOffset CycleTime =
+        PaymentTestData.CreatedAt.AddSeconds(10);
+
     [Fact]
     public async Task CycleProcessesEveryReplicatedPaymentSequentially()
     {
@@ -19,7 +24,7 @@ public sealed class PaymentProcessingWorkerTests
             CreateReplicated(Guid.NewGuid(), "WORKER-2"),
         };
         var processor = new RecordingProcessor();
-        var cycle = CreateCycle(payments, processor);
+        var cycle = CreateCycle(replicated: payments, processor: processor);
 
         var count = await cycle.ExecuteAsync(CancellationToken.None);
 
@@ -37,7 +42,7 @@ public sealed class PaymentProcessingWorkerTests
             CreateReplicated(Guid.NewGuid(), "WORKER-NEXT"),
         };
         var processor = new RecordingProcessor(throwOnFirst: true);
-        var cycle = CreateCycle(payments, processor);
+        var cycle = CreateCycle(replicated: payments, processor: processor);
 
         var count = await cycle.ExecuteAsync(CancellationToken.None);
 
@@ -52,8 +57,7 @@ public sealed class PaymentProcessingWorkerTests
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
         var cycle = CreateCycle(
-            [CreateReplicated(Guid.NewGuid(), "WORKER-CANCEL")],
-            new RecordingProcessor());
+            replicated: [CreateReplicated(Guid.NewGuid(), "WORKER-CANCEL")]);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => cycle.ExecuteAsync(cancellation.Token));
@@ -62,18 +66,10 @@ public sealed class PaymentProcessingWorkerTests
     [Fact]
     public async Task BackgroundServiceCreatesOneScopePerCycle()
     {
-        var scopeFactory = new CountingScopeFactory(() =>
-            CreateCycle([], new RecordingProcessor()));
+        var scopeFactory = new CountingScopeFactory(() => CreateCycle());
         var worker = new PaymentProcessingBackgroundService(
             scopeFactory,
-            new PaymentProcessingOptions
-            {
-                ProcessingDurationMilliseconds = 8_000,
-                LeaseDurationMilliseconds = 4_000,
-                LeaseRenewalIntervalMilliseconds = 1_000,
-                ScanIntervalMilliseconds = 500,
-                BatchSize = 10,
-            },
+            ValidOptions(),
             TimeProvider.System);
 
         await worker.ExecuteCycleAsync(CancellationToken.None);
@@ -85,33 +81,149 @@ public sealed class PaymentProcessingWorkerTests
     }
 
     [Fact]
-    public async Task RepositoryReceivesConfiguredBatchSize()
+    public async Task RepositoryQueriesReceiveConfiguredBatchSize()
     {
-        var repository = new FakeRepository([]);
-        var options = new PaymentProcessingOptions { BatchSize = 37 };
-        var cycle = new PaymentProcessingCycle(
-            repository,
-            new RecordingProcessor(),
-            new FakeIdGenerator(),
-            options,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<
-                PaymentProcessingCycle>.Instance);
+        var repository = new FakeRepository([], []);
+        var options = new PaymentProcessingOptions
+        {
+            ProcessingDurationMilliseconds = 8_000,
+            LeaseDurationMilliseconds = 4_000,
+            LeaseRenewalIntervalMilliseconds = 1_000,
+            ScanIntervalMilliseconds = 500,
+            BatchSize = 37,
+        };
+        var cycle = CreateCycle(repository: repository, options: options);
 
         await cycle.ExecuteAsync(CancellationToken.None);
 
-        Assert.Equal(37, repository.RequestedLimit);
+        Assert.Equal(37, repository.ReplicatedLimit);
+        Assert.Equal(37, repository.RecoverableLimit);
+    }
+
+    [Fact]
+    public async Task UnreachableRemoteOwnerWithExpiredLeaseIsRecovered()
+    {
+        var payment = CreateProcessing(
+            new NodeId("node-b"),
+            CycleTime.AddSeconds(-1));
+        var processor = new RecordingProcessor();
+        var cycle = CreateCycle(
+            recoverable: [payment],
+            processor: processor,
+            ownerHealth: MeshPeerHealthStatus.Unreachable);
+
+        var count = await cycle.ExecuteAsync(CancellationToken.None);
+
+        Assert.Equal(1, count);
+        Assert.Equal([payment.Id], processor.PaymentIds);
+    }
+
+    [Theory]
+    [InlineData(MeshPeerHealthStatus.Alive)]
+    [InlineData(MeshPeerHealthStatus.Suspected)]
+    [InlineData(MeshPeerHealthStatus.Unknown)]
+    public async Task OwnerNotUnreachableIsNotRecovered(
+        MeshPeerHealthStatus status)
+    {
+        var payment = CreateProcessing(
+            new NodeId("node-b"),
+            CycleTime.AddSeconds(-1));
+        var processor = new RecordingProcessor();
+        var cycle = CreateCycle(
+            recoverable: [payment],
+            processor: processor,
+            ownerHealth: status);
+
+        var count = await cycle.ExecuteAsync(CancellationToken.None);
+
+        Assert.Equal(0, count);
+        Assert.Empty(processor.PaymentIds);
+    }
+
+    [Fact]
+    public async Task ActiveLeaseIsNotRecovered()
+    {
+        var payment = CreateProcessing(
+            new NodeId("node-b"),
+            CycleTime.AddSeconds(1));
+        var processor = new RecordingProcessor();
+        var cycle = CreateCycle(
+            recoverable: [payment],
+            processor: processor,
+            ownerHealth: MeshPeerHealthStatus.Unreachable);
+
+        await cycle.ExecuteAsync(CancellationToken.None);
+
+        Assert.Empty(processor.PaymentIds);
+    }
+
+    [Fact]
+    public async Task LocalOwnerIsNotRecovered()
+    {
+        var payment = CreateProcessing(
+            new NodeId("node-a"),
+            CycleTime.AddSeconds(-1));
+        var processor = new RecordingProcessor();
+        var cycle = CreateCycle(
+            recoverable: [payment],
+            processor: processor,
+            ownerHealth: MeshPeerHealthStatus.Unreachable);
+
+        await cycle.ExecuteAsync(CancellationToken.None);
+
+        Assert.Empty(processor.PaymentIds);
+    }
+
+    [Fact]
+    public async Task SamePaymentIsNotProcessedTwiceInOneCycle()
+    {
+        var payment = CreateProcessing(
+            new NodeId("node-b"),
+            CycleTime.AddSeconds(-1));
+        var processor = new RecordingProcessor();
+        var cycle = CreateCycle(
+            replicated: [payment],
+            recoverable: [payment],
+            processor: processor,
+            ownerHealth: MeshPeerHealthStatus.Unreachable);
+
+        var count = await cycle.ExecuteAsync(CancellationToken.None);
+
+        Assert.Equal(1, count);
+        Assert.Equal(1, processor.Calls);
     }
 
     private static PaymentProcessingCycle CreateCycle(
-        IReadOnlyCollection<Payment> payments,
-        IPaymentProcessor processor) =>
-        new(
-            new FakeRepository(payments),
-            processor,
+        IReadOnlyCollection<Payment>? replicated = null,
+        IReadOnlyCollection<Payment>? recoverable = null,
+        IPaymentProcessor? processor = null,
+        FakeRepository? repository = null,
+        PaymentProcessingOptions? options = null,
+        MeshPeerHealthStatus ownerHealth = MeshPeerHealthStatus.Unknown)
+    {
+        var actualRepository = repository ??
+            new FakeRepository(replicated ?? [], recoverable ?? []);
+        return new PaymentProcessingCycle(
+            actualRepository,
+            processor ?? new RecordingProcessor(),
             new FakeIdGenerator(),
-            new PaymentProcessingOptions { BatchSize = 10 },
+            new FakeIdentity(),
+            new FakeHealthRegistry(ownerHealth),
+            new FrozenTimeProvider(CycleTime),
+            options ?? ValidOptions(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<
                 PaymentProcessingCycle>.Instance);
+    }
+
+    private static PaymentProcessingOptions ValidOptions() =>
+        new()
+        {
+            ProcessingDurationMilliseconds = 8_000,
+            LeaseDurationMilliseconds = 4_000,
+            LeaseRenewalIntervalMilliseconds = 1_000,
+            ScanIntervalMilliseconds = 500,
+            BatchSize = 10,
+        };
 
     private static Payment CreateReplicated(Guid id, string key)
     {
@@ -124,18 +236,50 @@ public sealed class PaymentProcessingWorkerTests
         return payment;
     }
 
-    private sealed class FakeRepository(
-        IReadOnlyCollection<Payment> payments) : IPaymentRepository
+    private static Payment CreateProcessing(
+        NodeId ownerNodeId,
+        DateTimeOffset leaseExpiresAtUtc)
     {
-        public int RequestedLimit { get; private set; }
+        var payment = CreateReplicated(
+            Guid.NewGuid(),
+            $"RECOVERY-{Guid.NewGuid():N}");
+        payment.Claim(
+            ownerNodeId,
+            1,
+            leaseExpiresAtUtc,
+            PaymentTestData.CreatedAt.AddSeconds(2));
+        payment.StartProcessing(
+            ownerNodeId,
+            1,
+            PaymentTestData.CreatedAt.AddSeconds(3));
+        return payment;
+    }
+
+    private sealed class FakeRepository(
+        IReadOnlyCollection<Payment> replicated,
+        IReadOnlyCollection<Payment> recoverable) : IPaymentRepository
+    {
+        public int ReplicatedLimit { get; private set; }
+
+        public int RecoverableLimit { get; private set; }
 
         public Task<IReadOnlyCollection<Payment>> GetReplicatedPaymentsAsync(
             int limit,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RequestedLimit = limit;
-            return Task.FromResult(payments);
+            ReplicatedLimit = limit;
+            return Task.FromResult(replicated);
+        }
+
+        public Task<IReadOnlyCollection<Payment>> GetRecoverablePaymentsAsync(
+            DateTimeOffset utcNow,
+            int limit,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RecoverableLimit = limit;
+            return Task.FromResult(recoverable);
         }
 
         public Task<Payment?> GetByIdAsync(
@@ -195,6 +339,57 @@ public sealed class PaymentProcessingWorkerTests
     private sealed class FakeIdGenerator : IIdGenerator
     {
         public Guid NewId() => Guid.NewGuid();
+    }
+
+    private sealed class FakeIdentity : IMeshNodeIdentity
+    {
+        public NodeId NodeId { get; } = new("node-a");
+
+        public Guid InstanceId { get; } = Guid.NewGuid();
+    }
+
+    private sealed class FakeHealthRegistry(MeshPeerHealthStatus status)
+        : IMeshPeerHealthRegistry
+    {
+        private readonly MeshPeerHealthSnapshot _snapshot = new(
+            new NodeId("node-b"),
+            new Uri("http://node-b:8081"),
+            status,
+            Guid.NewGuid(),
+            CycleTime.AddMinutes(-1),
+            CycleTime,
+            status == MeshPeerHealthStatus.Alive ? CycleTime : null,
+            status == MeshPeerHealthStatus.Alive ? null : CycleTime,
+            CycleTime,
+            status == MeshPeerHealthStatus.Alive ? 0 : 10,
+            status == MeshPeerHealthStatus.Alive ? 1 : 0,
+            status == MeshPeerHealthStatus.Alive ? 0 : 10,
+            0,
+            TimeSpan.FromMilliseconds(1),
+            null,
+            null,
+            1);
+
+        public IReadOnlyCollection<MeshPeerHealthSnapshot> GetSnapshots() =>
+            [_snapshot];
+
+        public MeshPeerHealthSnapshot? GetSnapshot(NodeId peerNodeId) =>
+            peerNodeId == _snapshot.PeerNodeId ? _snapshot : null;
+
+        public MeshPeerHealthTransition RecordSuccess(
+            MeshPeerProbeResult result,
+            DateTimeOffset observedAtUtc) =>
+            throw new NotSupportedException();
+
+        public MeshPeerHealthTransition RecordFailure(
+            MeshPeerProbeResult result,
+            DateTimeOffset observedAtUtc) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class FrozenTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 
     private sealed class CountingScopeFactory(

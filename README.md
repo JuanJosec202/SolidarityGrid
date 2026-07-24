@@ -10,7 +10,8 @@ idempotente para crear y consultar pagos locales. El Slice 4 agrega transporte
 mesh directo mediante gRPC. El Slice 5 incorpora el detector periódico de fallos
 y el Slice 6 replica cada pago de forma durable hasta alcanzar quorum 2 de 3.
 El Slice 7 agrega ownership por pago, leases renovables y procesamiento normal
-coordinado mediante ese quorum.
+coordinado mediante ese quorum. El Slice 8 recupera automáticamente pagos
+abandonados combinando el detector de fallos, leases vencidas, quorum y fencing.
 
 ## Slices completados
 
@@ -27,6 +28,8 @@ coordinado mediante ese quorum.
 - Slice 6: replicación gRPC durable e idempotente con quorum 2 de 3.
 - Slice 7: ownership por pago, lease temporal y procesamiento coordinado de
   ocho segundos hasta `Completed`.
+- Slice 8: takeover automático de pagos abandonados con term superior,
+  procesamiento al menos una vez y completion idempotente.
 
 ## Requisitos
 
@@ -169,8 +172,9 @@ permanente.
 
 ## Procesamiento
 
-Cada nodo ejecuta un worker local secuencial. El worker consulta solamente pagos
-`Replicated`, intenta adquirir ownership y, si gana, propaga
+Cada nodo ejecuta un worker local secuencial. El worker consulta pagos
+`Replicated` para el flujo inicial y pagos `Claimed` o `Processing` con lease
+vencida para recovery. Intenta adquirir ownership y, si gana, propaga
 `StartPaymentProcessing` antes de aplicar `StartProcessing` localmente.
 
 El efecto simulado dura exactamente 8000 ms. Durante ese intervalo la lease de
@@ -183,6 +187,45 @@ que la lease expire.
 Al terminar el delay, el owner confirma `CompletePayment` durablemente en al
 menos un peer y solo entonces completa su copia local. Los replays con el mismo
 owner y term son idempotentes.
+
+## Automatic takeover
+
+Un pago remoto abandonado solo es candidato cuando se cumplen simultáneamente:
+
+- su estado es `Claimed` o `Processing`;
+- su lease durable ya venció;
+- su owner remoto aparece `Unreachable`.
+
+`Alive`, `Suspected`, `Unknown`, una lease activa o un owner local impiden el
+takeover. El heartbeat funciona como señal de recuperación; la lease es la
+protección de consistencia. El nodo ganador adquiere quorum 2 de 3 con un term
+estrictamente superior y reutiliza el mismo orquestador de procesamiento.
+
+## Fencing
+
+`Payment.Term` es el fencing token. Tras pasar de term 1 a term 2, una renovación
+o completion atrasada con term 1 se rechaza y no puede reducir owner, term,
+attempt ni version. Los RPCs existentes son suficientes; no existe un endpoint
+manual de takeover.
+
+## At-least-once
+
+El trabajo simulado comienza nuevamente desde cero tras el takeover. Por eso
+`Attempt` pasa de 1 a 2, mientras la completion continúa siendo durable en
+quorum e idempotente. La PoC no afirma exactly-once absoluto. Un proveedor de
+pagos externo real también debería aceptar una clave de idempotencia.
+
+Flujo de recuperación:
+
+```text
+Processing term 1
+→ owner killed
+→ Unreachable
+→ lease expired
+→ takeover term 2
+→ Processing attempt 2
+→ Completed
+```
 
 ## Garantía
 
@@ -286,6 +329,18 @@ ocho segundos y una única completion:
 ./scripts/demo-processing.sh
 ```
 
+Para demostrar el takeover completo mediante una caída abrupta con
+`docker kill`, term superior, attempt 2, completion única y aceptación de otro
+pago por los sobrevivientes:
+
+```powershell
+.\scripts\demo-failover.ps1
+```
+
+```bash
+./scripts/demo-failover.sh
+```
+
 ## Persistencia local por nodo
 
 Cada nodo escribe en su propio archivo SQLite; no existe una base central ni un
@@ -376,19 +431,27 @@ La replicación durable está documentada en
 [ADR 0007: Durable payment replication](docs/adr/0007-durable-payment-replication.md).
 El ownership y procesamiento están documentados en
 [ADR 0008: Quorum leases and payment processing](docs/adr/0008-quorum-leases-and-payment-processing.md).
+El takeover automático está documentado en
+[ADR 0009: Automatic payment takeover](docs/adr/0009-automatic-payment-takeover.md).
 
-## Limitación actual
+## Limitaciones
 
-No existe reconciliación histórica ni takeover automático. Si el owner muere,
-la lease vence, pero otro nodo todavía no reclama automáticamente pagos
-`Claimed` o `Processing`. Solicitudes simultáneas con la misma clave en nodos
-distintos antes de replicarse también quedan fuera del escenario principal.
+- No existe reconciliación inmediata del nodo caído; su copia puede quedar
+  desactualizada. La completion durable en quorum no implica convergencia
+  histórica inmediata de las tres copias.
+- Si un proceso reinicia conservando una fila donde él mismo era el owner, la
+  recuperación local queda para una estrategia posterior de reconciliación.
+- Una partición de red puede parecer una caída. La intersección de quorum y el
+  fencing evitan dos completions válidas con términos distintos.
+- No existe un efecto financiero externo real.
+- Solicitudes simultáneas con la misma clave en nodos distintos antes de
+  replicarse quedan fuera del escenario principal.
 
 ## Roadmap
 
-- Recuperación de ownership después de lease vencida.
 - Reconciliación histórica y observabilidad distribuida.
-- Pipeline de demostración y pruebas de caos.
+- Endurecimiento del transporte e identidad entre nodos.
+- Pruebas de particiones y recuperación prolongada.
 
 No se asocian fechas a estos slices; cada uno deberá conservar los límites de
 arquitectura definidos aquí.

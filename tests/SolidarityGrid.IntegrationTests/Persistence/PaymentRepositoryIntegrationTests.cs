@@ -226,6 +226,119 @@ public sealed class PaymentRepositoryIntegrationTests
         Assert.Equal(EntityState.Unchanged, context.Entry(payment).State);
     }
 
+    [Fact]
+    public async Task RecoverableQueryFiltersOrdersLimitsAndTracksPayments()
+    {
+        await using var database = new SqliteTestDatabase();
+        await database.InitializeAsync();
+        var cutoff = PaymentPersistenceTestData.CreatedAt.AddSeconds(20);
+        var processingEarlier = CreateCoordinated(
+            "RECOVER-PROCESSING",
+            PaymentStatus.Processing,
+            cutoff.AddSeconds(-5));
+        var claimedLater = CreateCoordinated(
+            "RECOVER-CLAIMED",
+            PaymentStatus.Claimed,
+            cutoff.AddSeconds(-1));
+        var active = CreateCoordinated(
+            "RECOVER-ACTIVE",
+            PaymentStatus.Processing,
+            cutoff.AddSeconds(1));
+        var replicated = PaymentPersistenceTestData.Create("RECOVER-REPLICATED");
+        replicated.MarkReplicated(
+            PaymentPersistenceTestData.CreatedAt.AddSeconds(1));
+        var completed = CreateCoordinated(
+            "RECOVER-COMPLETED",
+            PaymentStatus.Processing,
+            cutoff.AddSeconds(10));
+        completed.Complete(
+            new NodeId("node-a"),
+            1,
+            PaymentPersistenceTestData.CreatedAt.AddSeconds(4));
+
+        await using var context = database.CreateContext();
+        context.AddRange(
+            claimedLater,
+            processingEarlier,
+            active,
+            replicated,
+            completed);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+        var repository = new PaymentRepository(context);
+
+        var limited = await repository.GetRecoverablePaymentsAsync(
+            cutoff,
+            1,
+            CancellationToken.None);
+
+        var first = Assert.Single(limited);
+        Assert.Equal(processingEarlier.Id, first.Id);
+        Assert.Equal(EntityState.Unchanged, context.Entry(first).State);
+
+        context.ChangeTracker.Clear();
+        var all = await repository.GetRecoverablePaymentsAsync(
+            cutoff,
+            10,
+            CancellationToken.None);
+
+        Assert.Equal(
+            [processingEarlier.Id, claimedLater.Id],
+            all.Select(payment => payment.Id));
+    }
+
+    [Fact]
+    public async Task RecoverableQueryComparesUtcTicksAcrossOffsets()
+    {
+        await using var database = new SqliteTestDatabase();
+        await database.InitializeAsync();
+        var expirationUtc =
+            PaymentPersistenceTestData.CreatedAt.AddSeconds(10);
+        var payment = CreateCoordinated(
+            "RECOVER-UTC-TICKS",
+            PaymentStatus.Claimed,
+            expirationUtc);
+
+        await using var context = database.CreateContext();
+        context.Add(payment);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        var sameInstantWithOffset = expirationUtc.ToOffset(
+            TimeSpan.FromHours(-5));
+        var result = await new PaymentRepository(context)
+            .GetRecoverablePaymentsAsync(
+                sameInstantWithOffset,
+                10,
+                CancellationToken.None);
+
+        Assert.Equal(payment.Id, Assert.Single(result).Id);
+    }
+
+    private static Payment CreateCoordinated(
+        string key,
+        PaymentStatus status,
+        DateTimeOffset leaseExpiresAtUtc)
+    {
+        var payment = PaymentPersistenceTestData.Create(key);
+        payment.MarkReplicated(
+            PaymentPersistenceTestData.CreatedAt.AddSeconds(1));
+        payment.Claim(
+            new NodeId("node-a"),
+            1,
+            leaseExpiresAtUtc,
+            PaymentPersistenceTestData.CreatedAt.AddSeconds(2));
+        if (status == PaymentStatus.Processing)
+        {
+            payment.StartProcessing(
+                new NodeId("node-a"),
+                1,
+                PaymentPersistenceTestData.CreatedAt.AddSeconds(3));
+        }
+
+        return payment;
+    }
+
     private static async Task<string[]> ReadNamesAsync(
         SolidarityGridDbContext context,
         string commandText)

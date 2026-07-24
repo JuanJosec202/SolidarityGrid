@@ -26,12 +26,26 @@ public sealed class PaymentOwnershipCoordinator(
         ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (payment.Status != PaymentStatus.Replicated)
+        var isTakeover =
+            payment.Status is PaymentStatus.Claimed or PaymentStatus.Processing;
+        var previousOwnerNodeId = payment.OwnerNodeId?.Value;
+        var previousTerm = payment.Term;
+        var previousLeaseExpiresAtUtc = payment.LeaseExpiresAtUtc;
+        var eligibilityTime = timeProvider.GetUtcNow();
+        if (payment.Status != PaymentStatus.Replicated &&
+            (!isTakeover || !payment.CanBeTakenOver(eligibilityTime)))
         {
-            return PaymentOwnershipResult.NotAcquired(0);
+            return PaymentOwnershipResult.NotAcquired(
+                0,
+                isTakeover,
+                previousOwnerNodeId,
+                previousTerm);
         }
 
-        await WaitForContentionTurnAsync(payment.Id, cancellationToken);
+        await WaitForContentionTurnAsync(
+            payment.Id,
+            isTakeover,
+            cancellationToken);
         var proposedTerm = payment.Term + 1;
         for (var round = 1; round <= MaximumRounds; round++)
         {
@@ -44,6 +58,18 @@ public sealed class PaymentOwnershipCoordinator(
                 proposedTerm,
                 leaseExpiresAtUtc,
                 occurredAtUtc);
+
+            if (isTakeover)
+            {
+                observer.TakeoverStarted(
+                    payment.Id,
+                    correlationId,
+                    previousOwnerNodeId!,
+                    previousTerm,
+                    localIdentity.NodeId.Value,
+                    proposedTerm,
+                    previousLeaseExpiresAtUtc!.Value);
+            }
 
             observer.ClaimStarted(payment.Id, correlationId, proposedTerm);
             var peerResults = await transport.TryClaimAsync(
@@ -80,18 +106,57 @@ public sealed class PaymentOwnershipCoordinator(
                         correlationId,
                         localIdentity.NodeId.Value,
                         proposedTerm);
+                    if (isTakeover)
+                    {
+                        observer.TakeoverAcquired(
+                            payment.Id,
+                            correlationId,
+                            previousOwnerNodeId!,
+                            previousTerm,
+                            localIdentity.NodeId.Value,
+                            proposedTerm);
+                    }
+
                     return PaymentOwnershipResult.Acquired(
                         proposedTerm,
                         leaseExpiresAtUtc,
-                        round);
+                        round,
+                        isTakeover,
+                        previousOwnerNodeId,
+                        previousTerm,
+                        localIdentity.NodeId.Value);
                 }
                 catch (PaymentDomainException)
                 {
-                    return PaymentOwnershipResult.NotAcquired(round);
+                    RejectTakeover(
+                        payment,
+                        correlationId,
+                        isTakeover,
+                        previousOwnerNodeId,
+                        previousTerm,
+                        proposedTerm,
+                        PaymentCoordinationErrorCodes.Failed);
+                    return PaymentOwnershipResult.NotAcquired(
+                        round,
+                        isTakeover,
+                        previousOwnerNodeId,
+                        previousTerm);
                 }
                 catch (PaymentConcurrencyException)
                 {
-                    return PaymentOwnershipResult.NotAcquired(round);
+                    RejectTakeover(
+                        payment,
+                        correlationId,
+                        isTakeover,
+                        previousOwnerNodeId,
+                        previousTerm,
+                        proposedTerm,
+                        PaymentCoordinationErrorCodes.ClaimTermStale);
+                    return PaymentOwnershipResult.NotAcquired(
+                        round,
+                        isTakeover,
+                        previousOwnerNodeId,
+                        previousTerm);
                 }
             }
 
@@ -99,7 +164,19 @@ public sealed class PaymentOwnershipCoordinator(
                     result.ErrorCode ==
                     PaymentCoordinationErrorCodes.ClaimLeaseActive))
             {
-                return PaymentOwnershipResult.NotAcquired(round);
+                RejectTakeover(
+                    payment,
+                    correlationId,
+                    isTakeover,
+                    previousOwnerNodeId,
+                    previousTerm,
+                    proposedTerm,
+                    PaymentCoordinationErrorCodes.ClaimLeaseActive);
+                return PaymentOwnershipResult.NotAcquired(
+                    round,
+                    isTakeover,
+                    previousOwnerNodeId,
+                    previousTerm);
             }
 
             var staleResults = peerResults
@@ -121,16 +198,66 @@ public sealed class PaymentOwnershipCoordinator(
                                       PaymentCoordinationErrorCodes.PeerUnavailable or
                                       PaymentCoordinationErrorCodes.DeadlineExceeded or
                                       PaymentCoordinationErrorCodes.Failed);
+            var errorCode = unavailable
+                ? PaymentCoordinationErrorCodes.QuorumUnavailable
+                : staleResults.Length > 0
+                    ? PaymentCoordinationErrorCodes.ClaimTermStale
+                    : PaymentCoordinationErrorCodes.Failed;
+            RejectTakeover(
+                payment,
+                correlationId,
+                isTakeover,
+                previousOwnerNodeId,
+                previousTerm,
+                proposedTerm,
+                errorCode);
             return unavailable
-                ? PaymentOwnershipResult.QuorumUnavailable(round)
-                : PaymentOwnershipResult.NotAcquired(round);
+                ? PaymentOwnershipResult.QuorumUnavailable(
+                    round,
+                    isTakeover,
+                    previousOwnerNodeId,
+                    previousTerm)
+                : PaymentOwnershipResult.NotAcquired(
+                    round,
+                    isTakeover,
+                    previousOwnerNodeId,
+                    previousTerm);
         }
 
-        return PaymentOwnershipResult.NotAcquired(MaximumRounds);
+        return PaymentOwnershipResult.NotAcquired(
+            MaximumRounds,
+            isTakeover,
+            previousOwnerNodeId,
+            previousTerm);
+    }
+
+    private void RejectTakeover(
+        Payment payment,
+        string correlationId,
+        bool isTakeover,
+        string? previousOwnerNodeId,
+        long previousTerm,
+        long proposedTerm,
+        string errorCode)
+    {
+        if (!isTakeover)
+        {
+            return;
+        }
+
+        observer.TakeoverRejected(
+            payment.Id,
+            correlationId,
+            previousOwnerNodeId!,
+            previousTerm,
+            localIdentity.NodeId.Value,
+            proposedTerm,
+            errorCode);
     }
 
     private async Task WaitForContentionTurnAsync(
         Guid paymentId,
+        bool isTakeover,
         CancellationToken cancellationToken)
     {
         var orderedCandidates = peerDirectory
@@ -147,9 +274,14 @@ public sealed class PaymentOwnershipCoordinator(
             return;
         }
 
-        var slotMilliseconds = Math.Max(
-            1,
-            options.ScanIntervalMilliseconds / (orderedCandidates.Length + 1));
+        // Recovery cycles are independently phased. A lease-sized slot keeps
+        // adjacent candidates apart long enough to avoid crossed remote claims.
+        var slotMilliseconds = isTakeover
+            ? options.LeaseDurationMilliseconds
+            : Math.Max(
+                1,
+                options.ScanIntervalMilliseconds /
+                (orderedCandidates.Length + 1));
         await Task.Delay(
             TimeSpan.FromMilliseconds(rank * slotMilliseconds),
             timeProvider,

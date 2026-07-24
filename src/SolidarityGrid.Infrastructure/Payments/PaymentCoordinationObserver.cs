@@ -61,6 +61,91 @@ public sealed class PaymentCoordinationObserver(
             term);
     }
 
+    public void TakeoverStarted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long newTerm,
+        DateTimeOffset previousLeaseExpiresAtUtc)
+    {
+        using var scope = BeginRecoveryScope(
+            paymentId,
+            correlationId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            newTerm,
+            null,
+            previousLeaseExpiresAtUtc,
+            null);
+        PaymentCoordinationLog.TakeoverStarted(
+            logger,
+            paymentId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            newTerm,
+            previousLeaseExpiresAtUtc);
+    }
+
+    public void TakeoverAcquired(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long newTerm)
+    {
+        using var scope = BeginRecoveryScope(
+            paymentId,
+            correlationId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            newTerm,
+            null,
+            null,
+            null);
+        PaymentCoordinationLog.TakeoverAcquired(
+            logger,
+            paymentId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            newTerm);
+    }
+
+    public void TakeoverRejected(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long proposedTerm,
+        string errorCode)
+    {
+        using var scope = BeginRecoveryScope(
+            paymentId,
+            correlationId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            proposedTerm,
+            null,
+            null,
+            errorCode);
+        PaymentCoordinationLog.TakeoverRejected(
+            logger,
+            paymentId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            proposedTerm,
+            errorCode);
+    }
+
     public void ProcessingStarted(
         Guid paymentId,
         string correlationId,
@@ -168,6 +253,64 @@ public sealed class PaymentCoordinationObserver(
             attempt);
     }
 
+    public void RecoveredPaymentProcessingStarted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        string newOwnerNodeId,
+        long previousTerm,
+        long newTerm,
+        int attempt)
+    {
+        using var scope = BeginRecoveryScope(
+            paymentId,
+            correlationId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            newTerm,
+            attempt,
+            null,
+            null);
+        PaymentCoordinationLog.RecoveredProcessingStarted(
+            logger,
+            paymentId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            newTerm,
+            attempt);
+    }
+
+    public void RecoveredPaymentCompleted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        string newOwnerNodeId,
+        long previousTerm,
+        long newTerm,
+        int attempt)
+    {
+        using var scope = BeginRecoveryScope(
+            paymentId,
+            correlationId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            newTerm,
+            attempt,
+            null,
+            null);
+        PaymentCoordinationLog.RecoveredCompleted(
+            logger,
+            paymentId,
+            previousOwnerNodeId,
+            newOwnerNodeId,
+            previousTerm,
+            newTerm,
+            attempt);
+    }
+
     private IDisposable? BeginScope(
         Guid paymentId,
         string correlationId,
@@ -183,5 +326,30 @@ public sealed class PaymentCoordinationObserver(
             ["Attempt"] = attempt,
             ["CorrelationId"] = correlationId,
             ["EventName"] = "PaymentCoordination",
+        });
+
+    private IDisposable? BeginRecoveryScope(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        string newOwnerNodeId,
+        long previousTerm,
+        long newTerm,
+        int? attempt,
+        DateTimeOffset? leaseExpiresAtUtc,
+        string? errorCode) =>
+        logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["NodeId"] = localIdentity.NodeId.Value,
+            ["PaymentId"] = paymentId,
+            ["PreviousOwner"] = previousOwnerNodeId,
+            ["NewOwner"] = newOwnerNodeId,
+            ["PreviousTerm"] = previousTerm,
+            ["NewTerm"] = newTerm,
+            ["Attempt"] = attempt,
+            ["CorrelationId"] = correlationId,
+            ["LeaseExpiresAtUtc"] = leaseExpiresAtUtc,
+            ["ErrorCode"] = errorCode,
+            ["EventName"] = "PaymentRecovery",
         });
 }

@@ -77,4 +77,31 @@ internal static partial class MeshServerLog
         string localNodeId,
         string errorCode,
         string grpcStatus);
+
+    [LoggerMessage(
+        EventId = 4206,
+        Level = LogLevel.Information,
+        EventName = "PaymentCompletionReplicaApplied",
+        Message = "Completion for payment {PaymentId} from owner {OwnerNodeId} at term {Term} was applied by replica {LocalNodeId}. AlreadyApplied={AlreadyApplied}.")]
+    public static partial void CompletionReplicaApplied(
+        ILogger logger,
+        Guid paymentId,
+        string ownerNodeId,
+        long term,
+        string localNodeId,
+        bool alreadyApplied);
+
+    [LoggerMessage(
+        EventId = 4207,
+        Level = LogLevel.Warning,
+        EventName = "StaleOwnerOperationRejected",
+        Message = "Stale owner operation {Operation} for payment {PaymentId} from owner {OwnerNodeId} at term {Term} was rejected by {LocalNodeId}. ErrorCode={ErrorCode}.")]
+    public static partial void StaleOwnerOperationRejected(
+        ILogger logger,
+        string operation,
+        Guid paymentId,
+        string ownerNodeId,
+        long term,
+        string localNodeId,
+        string errorCode);
 }

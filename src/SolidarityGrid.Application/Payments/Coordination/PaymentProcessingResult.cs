@@ -10,16 +10,24 @@ public enum PaymentProcessingStatus
     Cancelled,
 }
 
+public enum PaymentProcessingMode
+{
+    InitialProcessing,
+    TakeoverProcessing,
+}
+
 public sealed record PaymentProcessingResult(
     PaymentProcessingStatus Status,
     long? Term,
     int SuccessfulPeers,
-    int LeaseRenewals)
+    int LeaseRenewals,
+    PaymentProcessingMode? Mode)
 {
     public static PaymentProcessingResult From(
         PaymentProcessingStatus status,
         long? term = null,
         int successfulPeers = 0,
-        int leaseRenewals = 0) =>
-        new(status, term, successfulPeers, leaseRenewals);
+        int leaseRenewals = 0,
+        PaymentProcessingMode? mode = null) =>
+        new(status, term, successfulPeers, leaseRenewals, mode);
 }

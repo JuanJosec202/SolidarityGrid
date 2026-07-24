@@ -16,6 +16,11 @@ public interface IPaymentRepository
         int limit,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyCollection<Payment>> GetRecoverablePaymentsAsync(
+        DateTimeOffset utcNow,
+        int limit,
+        CancellationToken cancellationToken);
+
     ValueTask AddAsync(
         Payment payment,
         CancellationToken cancellationToken);

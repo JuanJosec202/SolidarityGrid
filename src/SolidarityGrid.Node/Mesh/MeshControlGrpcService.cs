@@ -255,9 +255,14 @@ public sealed class MeshControlGrpcService(
             request.OwnerNodeId,
             request.Term,
             request.OccurredAtUtcTicks);
+        using var scope = BeginCoordinationScope(
+            context,
+            values,
+            "StartPaymentProcessing");
         var result = await receiveProcessingStarted.ExecuteAsync(
             values.ToCommand(),
             context.CancellationToken);
+        LogStaleOwnerRejection("StartProcessing", values, result);
         return CreateCoordinationResponse(values.PaymentId, result);
     }
 
@@ -274,6 +279,10 @@ public sealed class MeshControlGrpcService(
             request.OwnerNodeId,
             request.Term,
             request.OccurredAtUtcTicks);
+        using var scope = BeginCoordinationScope(
+            context,
+            values,
+            "RenewPaymentLease");
         if (!TryCreateUtc(
                 request.NewLeaseExpiresAtUtcTicks,
                 out var leaseExpiresAtUtc))
@@ -284,6 +293,7 @@ public sealed class MeshControlGrpcService(
         var result = await receiveLeaseRenewal.ExecuteAsync(
             values.ToCommand(leaseExpiresAtUtc),
             context.CancellationToken);
+        LogStaleOwnerRejection("RenewLease", values, result);
         return CreateCoordinationResponse(values.PaymentId, result);
     }
 
@@ -300,10 +310,67 @@ public sealed class MeshControlGrpcService(
             request.OwnerNodeId,
             request.Term,
             request.OccurredAtUtcTicks);
+        using var scope = BeginCoordinationScope(
+            context,
+            values,
+            "CompletePayment");
         var result = await receiveCompletion.ExecuteAsync(
             values.ToCommand(),
             context.CancellationToken);
+        if (result.Applied)
+        {
+            MeshServerLog.CompletionReplicaApplied(
+                logger,
+                values.PaymentId,
+                values.OwnerNodeId.Value,
+                values.Term,
+                localIdentity.NodeId.Value,
+                result.AlreadyApplied);
+        }
+        else
+        {
+            LogStaleOwnerRejection("Complete", values, result);
+        }
+
         return CreateCoordinationResponse(values.PaymentId, result);
+    }
+
+    private IDisposable? BeginCoordinationScope(
+        ServerCallContext context,
+        CoordinationValues values,
+        string operation) =>
+        logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["NodeId"] = localIdentity.NodeId.Value,
+            ["PaymentId"] = values.PaymentId,
+            ["OwnerNodeId"] = values.OwnerNodeId.Value,
+            ["Term"] = values.Term,
+            ["CorrelationId"] = GetCorrelationId(context),
+            ["Operation"] = operation,
+            ["EventName"] = "PaymentCoordinationReplica",
+        });
+
+    private void LogStaleOwnerRejection(
+        string operation,
+        CoordinationValues values,
+        ReceivePaymentCoordinationResult result)
+    {
+        if (result.Applied ||
+            result.ErrorCode is not (
+                PaymentCoordinationErrorCodes.OwnerMismatch or
+                PaymentCoordinationErrorCodes.TermMismatch))
+        {
+            return;
+        }
+
+        MeshServerLog.StaleOwnerOperationRejected(
+            logger,
+            operation,
+            values.PaymentId,
+            values.OwnerNodeId.Value,
+            values.Term,
+            localIdentity.NodeId.Value,
+            result.ErrorCode);
     }
 
     private NodeId ParseCallerNodeId(string value)

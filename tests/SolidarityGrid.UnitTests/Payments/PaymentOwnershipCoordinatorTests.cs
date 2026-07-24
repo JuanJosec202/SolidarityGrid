@@ -169,6 +169,104 @@ public sealed class PaymentOwnershipCoordinatorTests
         Assert.Single(owners);
     }
 
+    [Theory]
+    [InlineData(PaymentStatus.Claimed)]
+    [InlineData(PaymentStatus.Processing)]
+    public async Task ExpiredOwnedPaymentCanBeTakenOver(
+        PaymentStatus initialStatus)
+    {
+        var fixture = CreateFixture(
+            Results(Granted("node-c"), Unavailable("node-b")));
+        var payment = CreateExpiredOwnedPayment(initialStatus);
+        var previousAttempt = payment.Attempt;
+
+        var result = await fixture.Coordinator.TryAcquireAsync(
+            payment,
+            "takeover",
+            CancellationToken.None);
+
+        Assert.Equal(PaymentOwnershipStatus.Acquired, result.Status);
+        Assert.True(result.IsTakeover);
+        Assert.Equal("node-b", result.PreviousOwnerNodeId);
+        Assert.Equal(1, result.PreviousTerm);
+        Assert.Equal("node-a", result.NewOwnerNodeId);
+        Assert.Equal(2, result.Term);
+        Assert.Equal(PaymentTestData.NodeA, payment.OwnerNodeId);
+        Assert.Equal(2, payment.Term);
+        Assert.Equal(PaymentStatus.Claimed, payment.Status);
+        Assert.Equal(previousAttempt, payment.Attempt);
+    }
+
+    [Fact]
+    public async Task ActiveLeaseCannotBeTakenOver()
+    {
+        var transport = new QueueTransport(
+            [Results(Granted("node-b"))]);
+        var fixture = CreateFixture(transport);
+        var payment = PaymentTestData.CreateProcessing(
+            PaymentTestData.NodeB,
+            leaseExpiresAt: PaymentTestData.CreatedAt.AddSeconds(20));
+
+        var result = await fixture.Coordinator.TryAcquireAsync(
+            payment,
+            "active-local",
+            CancellationToken.None);
+
+        Assert.Equal(PaymentOwnershipStatus.NotAcquired, result.Status);
+        Assert.Equal(0, transport.ClaimCalls);
+        Assert.Equal(PaymentTestData.NodeB, payment.OwnerNodeId);
+        Assert.Equal(1, payment.Term);
+    }
+
+    [Fact]
+    public async Task TwoConcurrentTakeoverCandidatesProduceOneNewOwner()
+    {
+        var transport = new ExclusiveClaimTransport();
+        var candidates = new[]
+        {
+            CreateFixture(transport, "node-b"),
+            CreateFixture(transport, "node-c"),
+        };
+        var payments = candidates
+            .Select(_ => CreateExpiredOwnedPayment(PaymentStatus.Processing))
+            .ToArray();
+
+        var results = await Task.WhenAll(candidates.Select((fixture, index) =>
+            fixture.Coordinator.TryAcquireAsync(
+                payments[index],
+                $"takeover-{index}",
+                CancellationToken.None)));
+
+        var acquired = Assert.Single(results, result =>
+            result.Status == PaymentOwnershipStatus.Acquired);
+        Assert.True(acquired.IsTakeover);
+        Assert.Equal(2, acquired.Term);
+        Assert.Single(payments, payment =>
+            payment.Status == PaymentStatus.Claimed &&
+            payment.Term == 2);
+        Assert.Single(
+            payments
+                .Where(payment => payment.Term == 2)
+                .Select(payment => payment.OwnerNodeId)
+                .Distinct());
+    }
+
+    private static Payment CreateExpiredOwnedPayment(PaymentStatus status)
+    {
+        var payment = PaymentTestData.CreateClaimed(
+            PaymentTestData.NodeB,
+            leaseExpiresAt: PaymentTestData.CreatedAt.AddSeconds(5));
+        if (status == PaymentStatus.Processing)
+        {
+            payment.StartProcessing(
+                PaymentTestData.NodeB,
+                1,
+                PaymentTestData.CreatedAt.AddSeconds(3));
+        }
+
+        return payment;
+    }
+
     private static Fixture CreateFixture(
         IReadOnlyCollection<PaymentClaimPeerResult> results) =>
         CreateFixture(new QueueTransport([results]));

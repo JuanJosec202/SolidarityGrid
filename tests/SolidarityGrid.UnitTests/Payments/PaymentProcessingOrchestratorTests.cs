@@ -121,6 +121,42 @@ public sealed class PaymentProcessingOrchestratorTests
         Assert.True(localCompletionIndex > remoteCompletionIndex);
     }
 
+    [Fact]
+    public async Task TakeoverReusesFlowWithHigherTermAndSecondAttempt()
+    {
+        var fixture = CreateFixture();
+        var payment = CreateExpiredProcessing();
+        fixture.UnitOfWork.Payment = payment;
+        fixture.UnitOfWork.Operations = fixture.Transport.Operations;
+
+        var result = await fixture.Orchestrator.ProcessAsync(
+            payment,
+            "takeover-flow",
+            CancellationToken.None);
+
+        Assert.Equal(
+            PaymentProcessingStatus.AcquiredAndCompleted,
+            result.Status);
+        Assert.Equal(
+            PaymentProcessingMode.TakeoverProcessing,
+            result.Mode);
+        Assert.Equal(PaymentStatus.Completed, payment.Status);
+        Assert.Equal(new NodeId("node-a"), payment.OwnerNodeId);
+        Assert.Equal(2, payment.Term);
+        Assert.Equal(2, payment.Attempt);
+        Assert.True(result.LeaseRenewals > 0);
+        var localStart = fixture.Transport.Operations.IndexOf("save-Processing");
+        var remoteRenew = fixture.Transport.Operations.IndexOf("renew");
+        var localRenew = fixture.Transport.Operations.IndexOf(
+            "save-Processing",
+            localStart + 1);
+        Assert.True(fixture.Transport.Operations.IndexOf("start") < localStart);
+        Assert.True(remoteRenew < localRenew);
+        Assert.True(
+            fixture.Transport.Operations.IndexOf("complete") <
+            fixture.Transport.Operations.IndexOf("save-Completed"));
+    }
+
     private static Fixture CreateFixture(
         bool startSucceeds = true,
         bool renewSucceeds = true,
@@ -169,6 +205,26 @@ public sealed class PaymentProcessingOrchestratorTests
             new Money(42m, "USD"),
             now);
         payment.MarkReplicated(now.AddMilliseconds(1));
+        return payment;
+    }
+
+    private static Payment CreateExpiredProcessing()
+    {
+        var now = TimeProvider.System.GetUtcNow();
+        var createdAt = now.AddSeconds(-10);
+        var owner = new NodeId("node-b");
+        var payment = Payment.Create(
+            Guid.NewGuid(),
+            new IdempotencyKey("PROCESS-TAKEOVER"),
+            new Money(42m, "USD"),
+            createdAt);
+        payment.MarkReplicated(createdAt.AddSeconds(1));
+        payment.Claim(
+            owner,
+            1,
+            now.AddSeconds(-1),
+            createdAt.AddSeconds(2));
+        payment.StartProcessing(owner, 1, createdAt.AddSeconds(3));
         return payment;
     }
 

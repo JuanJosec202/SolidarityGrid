@@ -18,6 +18,32 @@ public interface IPaymentCoordinationObserver
         string ownerNodeId,
         long term);
 
+    void TakeoverStarted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long newTerm,
+        DateTimeOffset previousLeaseExpiresAtUtc);
+
+    void TakeoverAcquired(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long newTerm);
+
+    void TakeoverRejected(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        long previousTerm,
+        string newOwnerNodeId,
+        long proposedTerm,
+        string errorCode);
+
     void ProcessingStarted(
         Guid paymentId,
         string correlationId,
@@ -52,5 +78,23 @@ public interface IPaymentCoordinationObserver
         string correlationId,
         string ownerNodeId,
         long term,
+        int attempt);
+
+    void RecoveredPaymentProcessingStarted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        string newOwnerNodeId,
+        long previousTerm,
+        long newTerm,
+        int attempt);
+
+    void RecoveredPaymentCompleted(
+        Guid paymentId,
+        string correlationId,
+        string previousOwnerNodeId,
+        string newOwnerNodeId,
+        long previousTerm,
+        long newTerm,
         int attempt);
 }

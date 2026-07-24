@@ -33,4 +33,22 @@ internal static partial class PaymentCoordinationLog
 
     [LoggerMessage(4509, LogLevel.Error, "Processing cycle failed for payment {PaymentId}.", EventName = "PaymentProcessingCycleFailed")]
     public static partial void PaymentFailed(ILogger logger, Exception exception, Guid paymentId);
+
+    [LoggerMessage(4510, LogLevel.Warning, "Abandoned payment {PaymentId} detected. PreviousOwner={PreviousOwner}; LeaseExpiresAtUtc={LeaseExpiresAtUtc}; PeerHealthStatus={PeerHealthStatus}.", EventName = "AbandonedPaymentDetected")]
+    public static partial void AbandonedPaymentDetected(ILogger logger, Guid paymentId, string previousOwner, DateTimeOffset leaseExpiresAtUtc, string peerHealthStatus);
+
+    [LoggerMessage(4511, LogLevel.Warning, "Taking over payment {PaymentId}. PreviousOwner={PreviousOwner}; NewOwner={NewOwner}; PreviousTerm={PreviousTerm}; NewTerm={NewTerm}; LeaseExpiresAtUtc={LeaseExpiresAtUtc}.", EventName = "PaymentTakeoverStarted")]
+    public static partial void TakeoverStarted(ILogger logger, Guid paymentId, string previousOwner, string newOwner, long previousTerm, long newTerm, DateTimeOffset leaseExpiresAtUtc);
+
+    [LoggerMessage(4512, LogLevel.Information, "Takeover acquired for payment {PaymentId}. PreviousOwner={PreviousOwner}; NewOwner={NewOwner}; PreviousTerm={PreviousTerm}; NewTerm={NewTerm}.", EventName = "PaymentTakeoverAcquired")]
+    public static partial void TakeoverAcquired(ILogger logger, Guid paymentId, string previousOwner, string newOwner, long previousTerm, long newTerm);
+
+    [LoggerMessage(4513, LogLevel.Information, "Takeover rejected for payment {PaymentId}. PreviousOwner={PreviousOwner}; Candidate={NewOwner}; PreviousTerm={PreviousTerm}; ProposedTerm={NewTerm}; ErrorCode={ErrorCode}.", EventName = "PaymentTakeoverRejected")]
+    public static partial void TakeoverRejected(ILogger logger, Guid paymentId, string previousOwner, string newOwner, long previousTerm, long newTerm, string errorCode);
+
+    [LoggerMessage(4514, LogLevel.Information, "Recovered payment {PaymentId} processing started. PreviousOwner={PreviousOwner}; NewOwner={NewOwner}; PreviousTerm={PreviousTerm}; NewTerm={NewTerm}; Attempt={Attempt}.", EventName = "RecoveredPaymentProcessingStarted")]
+    public static partial void RecoveredProcessingStarted(ILogger logger, Guid paymentId, string previousOwner, string newOwner, long previousTerm, long newTerm, int attempt);
+
+    [LoggerMessage(4515, LogLevel.Information, "Recovered payment {PaymentId} completed. PreviousOwner={PreviousOwner}; NewOwner={NewOwner}; PreviousTerm={PreviousTerm}; NewTerm={NewTerm}; Attempt={Attempt}.", EventName = "RecoveredPaymentCompleted")]
+    public static partial void RecoveredCompleted(ILogger logger, Guid paymentId, string previousOwner, string newOwner, long previousTerm, long newTerm, int attempt);
 }

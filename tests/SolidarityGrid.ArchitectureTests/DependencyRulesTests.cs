@@ -500,12 +500,6 @@ public sealed class DependencyRulesTests
             "SolidarityGrid.Contracts",
             "Protos",
             "mesh_control.proto"));
-        var nonDomainSource = string.Join(
-            Environment.NewLine,
-            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Application")),
-            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Infrastructure")),
-            ReadSourceFiles(Path.Combine(root, "src", "SolidarityGrid.Node")));
-
         Assert.DoesNotContain("rpc Heartbeat", proto, StringComparison.Ordinal);
         Assert.DoesNotContain("rpc Gossip", proto, StringComparison.Ordinal);
         Assert.DoesNotContain("rpc Vote", proto, StringComparison.Ordinal);
@@ -513,7 +507,7 @@ public sealed class DependencyRulesTests
             6,
             proto.Split('\n').Count(
                 line => line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal)));
-        Assert.DoesNotContain("Takeover", nonDomainSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("rpc Takeover", proto, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -613,6 +607,97 @@ public sealed class DependencyRulesTests
         Assert.DoesNotContain(
             serviceFields,
             field => field.FieldType == typeof(System.Threading.Timer));
+    }
+
+    [Fact]
+    public void AutomaticTakeoverReusesExistingBoundariesAndProtocol()
+    {
+        var root = FindRepositoryRoot();
+        var domain = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Domain"));
+        var application = ReadSourceFiles(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Application"));
+        var production = string.Join(
+            Environment.NewLine,
+            application,
+            ReadSourceFiles(Path.Combine(
+                root,
+                "src",
+                "SolidarityGrid.Infrastructure")),
+            ReadSourceFiles(Path.Combine(
+                root,
+                "src",
+                "SolidarityGrid.Node")));
+        var paymentBackgroundServices = Directory.GetFiles(
+            Path.Combine(
+                root,
+                "src",
+                "SolidarityGrid.Infrastructure",
+                "Payments"),
+            "*BackgroundService.cs",
+            SearchOption.TopDirectoryOnly);
+        var migrations = Directory.GetFiles(
+            Path.Combine(
+                root,
+                "src",
+                "SolidarityGrid.Infrastructure",
+                "Persistence",
+                "Migrations"),
+            "*.cs",
+            SearchOption.TopDirectoryOnly);
+        var proto = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Contracts",
+            "Protos",
+            "mesh_control.proto"));
+        var paymentEndpoints = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "SolidarityGrid.Node",
+            "Payments",
+            "PaymentEndpoints.cs"));
+
+        Assert.Single(paymentBackgroundServices);
+        Assert.EndsWith(
+            "PaymentProcessingBackgroundService.cs",
+            paymentBackgroundServices[0],
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("MeshPeerHealth", domain, StringComparison.Ordinal);
+        Assert.DoesNotContain("Grpc.", application, StringComparison.Ordinal);
+        Assert.Equal(
+            6,
+            proto.Split('\n').Count(line =>
+                line.TrimStart().StartsWith("rpc ", StringComparison.Ordinal)));
+        Assert.Equal(3, migrations.Length);
+
+        string[] forbiddenTerms =
+        [
+            "RecoveryBackgroundService",
+            "TakeoverBackgroundService",
+            "ConsensusEngine",
+            "GlobalLeader",
+            "VoteRepository",
+            "Redis",
+            "RabbitMQ",
+            "MassTransit",
+            "Kafka",
+            "BuildServiceProvider",
+            "RequestServices",
+        ];
+        Assert.All(forbiddenTerms, term =>
+            Assert.DoesNotContain(
+                term,
+                production,
+                StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            "takeover",
+            paymentEndpoints,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AssertHasNoReferences(Assembly assembly, params string[] forbiddenPrefixes)
